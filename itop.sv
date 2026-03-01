@@ -1,7 +1,6 @@
 `include "top.sv"
 
-// Top file used for iverilog.  Note this is mostly a stub that includes the 
-// top which Verilator uses.
+// Top file used for iverilog. this is mostly a stub that includes the top which Verilator uses.
 
 `timescale 1ns / 1ps
 
