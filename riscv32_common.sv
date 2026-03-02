@@ -303,8 +303,28 @@ function automatic ext_operand execute(
                         result = f7_mod(f7) ? (operand1 - operand2) : (operand1 + operand2);
                 f3_slt:     result = (operand1 < operand2) ? 1 : 0;
                 f3_sltu:    result = { 1'b0, operand1[`word_size-1:0] } < { 1'b0, operand2[`word_size-1:0] } ? 1 : 0;
-                f3_sll:     result = operand1 << operand2[5:0];
-                f3_sral:    result = f7_mod(f7) ? (operand1 >>> operand2[5:0]) : { 1'b0, operand1[`word_size-1:0] } >> operand2[5:0];
+                // RV32I: shifts use a 5-bit shift amount (rs2[4:0] or shamt[4:0])
+                f3_sll: begin
+                    word       sh_op1;
+                    word       sh_res;
+                    shamt      sh_amt;
+                    sh_op1 = operand1[`word_size-1:0];
+                    sh_amt = operand2[4:0];
+                    sh_res = sh_op1 << sh_amt;
+                    result = {1'b0, sh_res};
+                end
+                f3_sral: begin
+                    word       sh_op1;
+                    word       sh_res;
+                    shamt      sh_amt;
+                    sh_op1 = operand1[`word_size-1:0];
+                    sh_amt = operand2[4:0];
+                    if (f7_mod(f7))
+                        sh_res = $signed(sh_op1) >>> sh_amt;   // SRA / SRAI (arithmetic)
+                    else
+                        sh_res = sh_op1 >> sh_amt;             // SRL / SRLI (logical)
+                    result = {1'b0, sh_res};
+                end
                 f3_xor:     result = operand1 ^ operand2;
                 f3_or:      result = operand1 | operand2;
                 f3_and:     result = operand1 & operand2;
