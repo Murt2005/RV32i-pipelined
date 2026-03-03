@@ -58,7 +58,15 @@ int main(void) {
         printf("OK: bench_fib\n");
     }
 
-    
+    const int first_large = 50;
+    const int second_large = 50;
+    int large_combined = first_large + second_large;
+    printf("%d\n", large_combined);
+    if (large_combined != 100) {
+        printf("ERORR: mismatch\n");
+    } else {
+        printf("passed\n");
+    }
 
     printf("\nC math benchmark complete.\n");
     return 0;
