@@ -25,7 +25,6 @@ The core implements **RV32I** only (no M, A, F, or other extensions). Supported 
 | **JAL** | `jal` |
 | **JALR** | `jalr` |
 | **LUI** | `lui` |
-Shifts use the 5-bit shift amount (rs2[4:0] or immediate) as in the RV32I spec. The toolchain is built for RV32I (e.g. `-march=rv32i`), so no multiply/divide instructions are emitted.
 
 ## Build System
 
