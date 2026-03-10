@@ -14,7 +14,10 @@
 .text
 
 _start:
-    li      sp, (0x00030000 - 16)
+    # NOTE: FPGA build uses 4KiB data RAM (fpga/hardware_top.v `HW_MEM_SIZE=4096`).
+    # Stack must live within that window to avoid aliasing/corrupting .data/.bss.
+    # Keep stack at top of data memory: 0x20000 + 0x1000 = 0x21000.
+    li      sp, (0x00021000 - 16)
 
     la      a0, msg_header
     call    print_str

@@ -70,8 +70,20 @@ int main(int argc, char *argv[]) {
         fclose(ifp);
 
     int true_size = amount;
-    while (data[true_size - 1] == 0 && true_size  > 0)
+    while (true_size > 0 && data[true_size - 1] == 0)
         --true_size;
+
+    // Some tools (notably Yosys `$readmemh`) can error out on completely empty
+    // hex files. If the input has zero bytes, emit a single zero word/beat so
+    // the generated hex files exist and are non-empty.
+    if (amount == 0 && true_size == 0) {
+        if (byte_files) {
+            true_size = parse64bit ? 8 : 4;
+        } else {
+            true_size = 4;
+        }
+        amount = true_size;
+    }
 
     uint32_t *data32 = (uint32_t *) data;
 

@@ -2,6 +2,7 @@
 `define __cpu_sv
 
 `include "riscv.sv"
+`include "regfile_ebr.sv"
 
 // Request to set a new fetch PC (on branch/jump or mispredict)
 typedef struct packed {
@@ -42,8 +43,6 @@ typedef struct packed {
     riscv::funct3 f3;
     riscv::funct7 f7;
     riscv::opcode_q instruction_opcode;
-    riscv::instr_format instruction_format;
-    riscv::instr32 instruction;
     riscv::word pc;
 } decoded_instruction_t;
 
@@ -65,9 +64,6 @@ typedef struct packed {
 // Execute stage output to pass to memory stage
 typedef struct packed {
     bool is_instruction_valid;
-    riscv::tag rs1;
-    riscv::tag rs2;
-    riscv::word rd1;
     riscv::word rd2;
     riscv::funct3 f3;
     riscv::opcode_q instruction_opcode;
@@ -86,8 +82,6 @@ typedef struct packed {
 // Memory stage output, passes write-back info and load result (later) to writeback
 typedef struct packed {
     bool is_instruction_valid;
-    riscv::word pc;
-    riscv::word execute_result;
     riscv::funct3 f3;
     riscv::opcode_q instruction_opcode;
     writeback_instruction_t writeback_instruction;
@@ -222,8 +216,26 @@ module decode_and_writeback(
 
 import riscv::*;
 
-// Register file and bypass state
-word register_file[0:31];
+typedef struct packed {
+    bool is_instruction_valid;
+    riscv::tag rs1;
+    riscv::tag rs2;
+    riscv::word imm;
+    riscv::tag writeback_select;
+    bool is_writeback_valid;
+    riscv::funct3 f3;
+    riscv::funct7 f7;
+    riscv::opcode_q instruction_opcode;
+    riscv::word pc;
+} decoded_fields_t;
+
+decoded_fields_t id0_fields; // field decode + regfile address launch
+decoded_fields_t id1_fields; // aligns with EBR regfile read data
+
+logic [31:0] rf_rdata1;
+logic [31:0] rf_rdata2;
+
+// Bypass state (for execute stage forwarding)
 word register_file_bypass_rd;
 tag register_file_bypass_rs;
 bool register_file_bypass_valid;
@@ -235,11 +247,18 @@ always_comb begin
     register_file_bypass_out.rs = register_file_bypass_rs;
 end
 
-// Reset register file to zero at elaboration (simulation).
-initial begin
-    for (int i = 0; i < 32; i++)
-        register_file[i] = `word_size'd0;
-end
+regfile_2r1w_ebr regfile_m (
+    .clk(clk),
+    .raddr1(id0_fields.rs1),
+    .raddr2(id0_fields.rs2),
+    .rdata1(rf_rdata1),
+    .rdata2(rf_rdata2),
+    .wen(writeback_control_signal_in.advance
+         && writeback_instruction_in.is_instruction_valid
+         && writeback_instruction_in.is_writeback_valid),
+    .waddr(writeback_instruction_in.wbs),
+    .wdata(writeback_instruction_in.wbd)
+);
 
 always_ff @(posedge clk) begin
     word wbd;
@@ -258,42 +277,32 @@ always_ff @(posedge clk) begin
     else
         register_file_bypass_valid <= false;  // default; set true only in writeback block below
 
-    // Decode output: either a valid decoded instruction or a bubble
+    // ID0/ID1 pipeline (fields only). Regfile data comes from EBR one cycle later.
     if (reset || decode_control_signal_in.flush) begin
-        decoded_instruction_out <= {($bits(decoded_instruction_t)){1'b0}};
-        decoded_instruction_out.is_instruction_valid <= false;
-    end else begin
-        if (decode_control_signal_in.advance && fetched_instruction_in.is_instruction_valid) begin
-            decoded_instruction_out.is_instruction_valid <= true;
-            decoded_instruction_out.rs1 <= rs1;
-            decoded_instruction_out.rs2 <= rs2;
-            decoded_instruction_out.writeback_select <= decode_rd(fetched_instruction_in.instruction);
-            decoded_instruction_out.f3 <= decode_funct3(fetched_instruction_in.instruction);
-            decoded_instruction_out.instruction_opcode <= op_q;
-            decoded_instruction_out.instruction_format <= format;
-            decoded_instruction_out.imm <= decode_imm(fetched_instruction_in.instruction, format);
-            decoded_instruction_out.is_writeback_valid <= decode_writeback(op_q);
-            decoded_instruction_out.f7 <= decode_funct7(fetched_instruction_in.instruction, format);
-            decoded_instruction_out.pc <= fetched_instruction_in.pc;
-            decoded_instruction_out.instruction <= fetched_instruction_in.instruction;
-        end else begin
-            // no advance or invalid fetch: send a bubble (invalid decoded instruction).
-            decoded_instruction_out <= {($bits(decoded_instruction_t)){1'b0}};
-            decoded_instruction_out.is_instruction_valid <= false;
-        end
-    end
+        id0_fields <= {($bits(decoded_fields_t)){1'b0}};
+        id0_fields.is_instruction_valid <= false;
+        id1_fields <= {($bits(decoded_fields_t)){1'b0}};
+        id1_fields.is_instruction_valid <= false;
+    end else if (decode_control_signal_in.advance) begin
+        // Shift fields to align with EBR output latency
+        id1_fields <= id0_fields;
 
-    // Register file read: when we advance with a valid instruction, latch the read data.
-    // Use same-cycle bypass from writeback when writeback is writing to rs1/rs2 this cycle.
-    if (decode_control_signal_in.advance && fetched_instruction_in.is_instruction_valid) begin
-        if (writeback_control_signal_in.advance && writeback_instruction_in.is_instruction_valid && writeback_instruction_in.is_writeback_valid && rs1 == writeback_instruction_in.wbs)
-            decoded_instruction_out.rd1 <= writeback_instruction_in.wbd;
-        else
-            decoded_instruction_out.rd1 <= register_file[rs1];
-        if (writeback_control_signal_in.advance && writeback_instruction_in.is_instruction_valid && writeback_instruction_in.is_writeback_valid && rs2 == writeback_instruction_in.wbs)
-            decoded_instruction_out.rd2 <= writeback_instruction_in.wbd;
-        else
-            decoded_instruction_out.rd2 <= register_file[rs2];
+        // Capture new decoded fields (or bubble)
+        if (fetched_instruction_in.is_instruction_valid) begin
+            id0_fields.is_instruction_valid <= true;
+            id0_fields.rs1 <= rs1;
+            id0_fields.rs2 <= rs2;
+            id0_fields.writeback_select <= decode_rd(fetched_instruction_in.instruction);
+            id0_fields.f3 <= decode_funct3(fetched_instruction_in.instruction);
+            id0_fields.instruction_opcode <= op_q;
+            id0_fields.imm <= decode_imm(fetched_instruction_in.instruction, format);
+            id0_fields.is_writeback_valid <= decode_writeback(op_q);
+            id0_fields.f7 <= decode_funct7(fetched_instruction_in.instruction, format);
+            id0_fields.pc <= fetched_instruction_in.pc;
+        end else begin
+            id0_fields <= {($bits(decoded_fields_t)){1'b0}};
+            id0_fields.is_instruction_valid <= false;
+        end
     end
 
     // Write-back: commit result from writeback stage into register file and set bypass
@@ -301,10 +310,38 @@ always_ff @(posedge clk) begin
         && writeback_control_signal_in.advance
         && writeback_instruction_in.is_instruction_valid
         && writeback_instruction_in.is_writeback_valid) begin
-        register_file[writeback_instruction_in.wbs] <= writeback_instruction_in.wbd;
         register_file_bypass_rs <= writeback_instruction_in.wbs;
         register_file_bypass_rd <= writeback_instruction_in.wbd;
         register_file_bypass_valid <= true;
+    end
+end
+
+// ID1 output assembly (combinational): align decoded fields with EBR regfile data.
+// Apply WB->ID bypass in this stage so that an instruction can see a WB write
+// occurring during its regfile-read cycle.
+always_comb begin
+    decoded_instruction_out = {($bits(decoded_instruction_t)){1'b0}};
+    decoded_instruction_out.is_instruction_valid = id1_fields.is_instruction_valid;
+    decoded_instruction_out.rs1 = id1_fields.rs1;
+    decoded_instruction_out.rs2 = id1_fields.rs2;
+    decoded_instruction_out.imm = id1_fields.imm;
+    decoded_instruction_out.writeback_select = id1_fields.writeback_select;
+    decoded_instruction_out.is_writeback_valid = id1_fields.is_writeback_valid;
+    decoded_instruction_out.f3 = id1_fields.f3;
+    decoded_instruction_out.f7 = id1_fields.f7;
+    decoded_instruction_out.instruction_opcode = id1_fields.instruction_opcode;
+    decoded_instruction_out.pc = id1_fields.pc;
+
+    decoded_instruction_out.rd1 = rf_rdata1;
+    decoded_instruction_out.rd2 = rf_rdata2;
+
+    if (writeback_control_signal_in.advance
+        && writeback_instruction_in.is_instruction_valid
+        && writeback_instruction_in.is_writeback_valid) begin
+        if (id1_fields.rs1 == writeback_instruction_in.wbs)
+            decoded_instruction_out.rd1 = writeback_instruction_in.wbd;
+        if (id1_fields.rs2 == writeback_instruction_in.wbs)
+            decoded_instruction_out.rd2 = writeback_instruction_in.wbd;
     end
 end
 endmodule
@@ -420,22 +457,44 @@ always_comb begin
         decoded_instruction_in.f3,
         decoded_instruction_in.f7);
 
-    // Next PC: for non-control-flow instructions this is PC+4; for branches/jumps it is the target.
-    next_pc_comb = compute_next_pc(
-        cast_to_ext_operand(rd1),
-        execute_result_comb,
-        decoded_instruction_in.imm,
-        decoded_instruction_in.pc,
-        decoded_instruction_in.instruction_opcode,
-        decoded_instruction_in.f3);
+    // Next PC: compute using direct compares for branches (spec-correct).
+    // Do NOT infer branch conditions from subtraction sign bits; that fails on overflow
+    // and breaks software routines (e.g. libgcc __udivsi3) that depend on correct Bxx.
+    next_pc_comb = decoded_instruction_in.pc + 4;
+    unique case (decoded_instruction_in.instruction_opcode)
+        q_jal: begin
+            next_pc_comb = decoded_instruction_in.pc + decoded_instruction_in.imm;
+        end
+        q_jalr: begin
+            next_pc_comb = (rd1 + decoded_instruction_in.imm) & ~32'd1;
+        end
+        q_branch: begin
+            logic take;
+            take = 1'b0;
+            unique case (decoded_instruction_in.f3)
+                3'd0: take = (rd1 == rd2); // BEQ
+                3'd1: take = (rd1 != rd2); // BNE
+                3'd4: take = ($signed(rd1) <  $signed(rd2)); // BLT
+                3'd5: take = ($signed(rd1) >= $signed(rd2)); // BGE
+                3'd6: take = (rd1 < rd2);   // BLTU
+                3'd7: take = (rd1 >= rd2);  // BGEU
+                default: take = 1'b0;
+            endcase
+            if (take)
+                next_pc_comb = decoded_instruction_in.pc + decoded_instruction_in.imm;
+        end
+        default: begin end
+    endcase
 
     // Default: no PC correction
     pc_control_out = {($bits(pc_control_t)){1'b0}};
     pc_control_out.branch_redirect_needed = false;
 
-    // Mispredict: the next PC we computed (next_pc_comb) is not what fetch is currently fetching (fetched_instruction_in.pc).
-    // Control can use this to redirect fetch to correct_pc.
-    if (decoded_instruction_in.is_instruction_valid && next_pc_comb != fetched_instruction_in.pc) begin
+    // Redirect only when this instruction changes control flow away from the sequential PC+4.
+    // After adding 1-cycle-latency regfile reads (pipelined decode), fetch PC is no longer
+    // aligned with the instruction currently in execute, so comparing against fetched PC
+    // would cause spurious redirects.
+    if (decoded_instruction_in.is_instruction_valid && next_pc_comb != (decoded_instruction_in.pc + 4)) begin
         pc_control_out.branch_redirect_needed = true;
         pc_control_out.branch_target_pc = next_pc_comb;
     end
@@ -451,10 +510,7 @@ always_ff @(posedge clk) begin
             executed_instruction_out.is_instruction_valid <= true;
 
             // Pass operands and write-back info to memory stage.
-            executed_instruction_out.rd1 <= bypassed_rd1_comb;
             executed_instruction_out.rd2 <= bypassed_rd2_comb;
-            executed_instruction_out.rs1 <= decoded_instruction_in.rs1;
-            executed_instruction_out.rs2 <= decoded_instruction_in.rs2;
             executed_instruction_out.writeback_instruction.wbs <= decoded_instruction_in.writeback_select;
             executed_instruction_out.writeback_instruction.is_writeback_valid <= decoded_instruction_in.is_writeback_valid;
             executed_instruction_out.writeback_instruction.wbd <= execute_result_comb[`word_size-1:0];
@@ -497,9 +553,7 @@ import riscv::*;
 // Combinational: build data memory request
 always_comb begin
     word rd2;
-    word rd1;
 
-    rd1 = executed_instruction_in.rd1;
     rd2 = executed_instruction_in.rd2;
     data_memory_request = memory_io_no_req;
 

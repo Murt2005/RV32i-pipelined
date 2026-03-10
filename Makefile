@@ -16,6 +16,9 @@ LIBS=libmc/libmc.a
 TEST_S=start.s
 TEST_C=test.c
 
+# Minimal hardware bring-up start file (no C runtime needed)
+HW_TEST_S=start_hw.s
+
 # --------------------------------------------------------------------
 # Per-file RV32I assembly tests (each builds to its own ELF/hex images)
 # --------------------------------------------------------------------
@@ -25,6 +28,7 @@ TESTS_STEMS := $(patsubst tests/%.s,%,$(TESTS_S))
 TESTS_RUN_NAMES := $(subst /,-,$(TESTS_STEMS))
 
 SIM_IVERILOG := build/sim/result-iverilog
+HW_SIM_IVERILOG := build/sim/hw-result-iverilog
 
 .PHONY: run-tests-iverilog run-one-iverilog run-legacy-iverilog
 
@@ -53,9 +57,29 @@ test: $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LIBS) $(TOOLS)
 	$(LD) $(LDFLAGS) -o test $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LDPOSTFLAGS)
 	/bin/bash ./elftohex.sh test .
 
+# Minimal hardware test: assemble start_hw.s only, link, and generate hex.
+# This is intended for FPGA bring-up (UART + HALT MMIO check).
+hw-test: $(HW_TEST_S:.s=.o) $(TOOLS)
+	$(LD) $(LDFLAGS) -o hw-test $(HW_TEST_S:.s=.o)
+	/bin/bash ./elftohex.sh hw-test .
+
+# --------------------------------------------------------------------
+# Minimal hardware test simulation
+# --------------------------------------------------------------------
+# hw-result-iverilog:
+#   - Uses the minimal `start_hw.s` program (via hw-test -> code*.hex/data*.hex)
+#   - Builds and runs an Icarus Verilog simulation using the usual itop/top/cpu.
+$(HW_SIM_IVERILOG): itop.sv top.sv cpu.sv hw-test
+	mkdir -p $(dir $@)
+	$(IVERILOG) -g2012 -DIVERILOG -o $@ itop.sv
+
+hw-result-iverilog: $(HW_SIM_IVERILOG)
+	./$(HW_SIM_IVERILOG)
+	rm $(HW_SIM_IVERILOG)
+
 $(SIM_IVERILOG): itop.sv top.sv cpu.sv memory.sv memory_io.sv riscv.sv riscv32_common.sv base.sv system.sv
 	mkdir -p $(dir $@)
-	$(IVERILOG) -g2012 -o $@ itop.sv
+	$(IVERILOG) -g2012 -DIVERILOG -o $@ itop.sv
 
 run-legacy-iverilog: result-iverilog
 
@@ -86,7 +110,7 @@ result-verilator: top.sv verilator_top.cpp cpu.sv test
 	 ./result-verilator
 
 result-iverilog: itop.sv top.sv cpu.sv test
-	 $(IVERILOG) -g2012 -o result-iverilog itop.sv
+	 $(IVERILOG) -g2012 -DIVERILOG -o result-iverilog itop.sv
 	 ./result-iverilog
 	 rm result-iverilog
 

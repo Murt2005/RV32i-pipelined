@@ -11,7 +11,9 @@
 
 .set UART_ADDR, 0x0002FFF8
 .set HALT_ADDR, 0x0002FFFC
-.set STACK_TOP, 0x00030000
+# FPGA build uses 4KiB data RAM (see fpga/hardware_top.v `HW_MEM_SIZE=4096`).
+# Place the stack at the top of the 4KiB data window: 0x20000 + 0x1000.
+.set STACK_TOP, 0x00021000
 
 .macro TEST_FILE_HEADER header_label
     la      a0, \header_label
