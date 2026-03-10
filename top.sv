@@ -1,6 +1,6 @@
 `include "base.sv"
 `include "memory.sv"
-`include "cpu.sv"
+`include "cpunew.sv"
 
 module top(input clk, input reset, output logic halt);
 

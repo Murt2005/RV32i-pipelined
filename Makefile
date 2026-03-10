@@ -53,7 +53,7 @@ test: $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LIBS) $(TOOLS)
 	$(LD) $(LDFLAGS) -o test $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LDPOSTFLAGS)
 	/bin/bash ./elftohex.sh test .
 
-$(SIM_IVERILOG): itop.sv top.sv cpu.sv memory.sv memory_io.sv riscv.sv riscv32_common.sv base.sv system.sv
+$(SIM_IVERILOG): itop.sv top.sv cpunew.sv memory.sv memory_io.sv riscv.sv riscv32_common.sv base.sv system.sv
 	mkdir -p $(dir $@)
 	$(IVERILOG) -g2012 -o $@ itop.sv
 
@@ -79,13 +79,13 @@ run-tests-iverilog: $(TOOLS) $(SIM_IVERILOG)
 	done
 
 
-result-verilator: top.sv verilator_top.cpp cpu.sv test
+result-verilator: top.sv verilator_top.cpp cpunew.sv test
 	 $(VERILATOR) -O0 --cc --build --top-module top top.sv verilator_top.cpp --exe
 	 cp obj_dir/Vtop ./result-verilator
 	 rm -rf obj_dir
 	 ./result-verilator
 
-result-iverilog: itop.sv top.sv cpu.sv test
+result-iverilog: itop.sv top.sv cpunew.sv test
 	 $(IVERILOG) -g2012 -o result-iverilog itop.sv
 	 ./result-iverilog
 	 rm result-iverilog
