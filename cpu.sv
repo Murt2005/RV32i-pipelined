@@ -339,7 +339,6 @@ module execute(
 import riscv::*;
 
 // Internal state
-word expected_execute_pc;
 ext_operand execute_result_comb;
 word next_pc_comb;
 word bypassed_rd1_comb;
@@ -441,28 +440,15 @@ always_comb begin
         pc_control_out.branch_target_pc = next_pc_comb;
     end
 
-    // Wrong PC: the instruction in decode (decoded_instruction_in.pc) doesn't match our tracked PC (pc).
-    // Indicates an ordering/consistency issue; correct_pc is set to our tracked pc to realign.
-    if (decoded_instruction_in.is_instruction_valid && decoded_instruction_in.pc != expected_execute_pc) begin
-        pc_control_out.stale_instruction_in_execute = true;
-        pc_control_out.expected_execute_pc = expected_execute_pc;
-    end
 end
 
 // Sequential: pass instruction to memory stage and update PC tracking
 always_ff @(posedge clk) begin
     if (reset) begin
         executed_instruction_out.is_instruction_valid <= false;
-        expected_execute_pc <= reset_pc;
     end else begin
         if (decoded_instruction_in.is_instruction_valid && execute_control_signal_in.advance) begin
-            // Check if this instruction is the one we expect (same PC as our tracked pc).
-            if (decoded_instruction_in.pc == expected_execute_pc) begin
-                executed_instruction_out.is_instruction_valid <= true;
-                expected_execute_pc <= next_pc_comb;
-            end else begin
-                executed_instruction_out.is_instruction_valid <= false;
-            end
+            executed_instruction_out.is_instruction_valid <= true;
 
             // Pass operands and write-back info to memory stage.
             executed_instruction_out.rd1 <= bypassed_rd1_comb;
