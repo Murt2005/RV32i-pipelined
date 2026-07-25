@@ -320,6 +320,31 @@ def sim_output(stem, repo_root):
     return "\n".join(lines).strip()
 
 
+def do_riscv_tests(board, repo_root, timeout):
+    """Run the official rv32ui suite on hardware. Each test prints one line."""
+    elfs = sorted(glob.glob(os.path.join(repo_root, "build", "riscv-tests", "*.elf")))
+    if not elfs:
+        print("no ELFs in build/riscv-tests -- run `make riscv-tests` first",
+              file=sys.stderr)
+        return 2
+
+    npass = nfail = 0
+    for elf in elfs:
+        name = os.path.basename(elf)[:-4]
+        out, halted = run_elf(board, elf, timeout=timeout, quiet=True)
+        text = out.decode("utf-8", errors="replace").strip()
+        if halted and text == "PASS":
+            npass += 1
+            print(f"PASS rv32ui-{name}")
+        else:
+            nfail += 1
+            detail = text if halted else f"no halt, got {text!r}"
+            print(f"FAIL rv32ui-{name}  ({detail})")
+
+    print(f"\n{npass} passed, {nfail} failed, {len(elfs)} total")
+    return 0 if nfail == 0 else 1
+
+
 def do_regress(board, repo_root, timeout):
     stems = []
     for sub in ("isa", "hazards"):
@@ -370,13 +395,15 @@ def main():
     ap.add_argument("--probe", action="store_true", help="ping and report status")
     ap.add_argument("--regress", action="store_true",
                     help="run every test in tests/ and diff against simulation")
+    ap.add_argument("--riscv-tests", action="store_true",
+                    help="run the official rv32ui suite from build/riscv-tests")
     ap.add_argument("--timeout", type=float, default=15.0,
                     help="seconds to wait for the halt sentinel")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
-    if not (args.elf or args.probe or args.regress):
-        ap.error("give one of --elf, --probe or --regress")
+    if not (args.elf or args.probe or args.regress or args.riscv_tests):
+        ap.error("give one of --elf, --probe, --regress or --riscv-tests")
 
     try:
         board = open_board(args.port, verbose=args.verbose)
@@ -390,6 +417,8 @@ def main():
         if args.elf:
             _, halted = run_elf(board, args.elf, timeout=args.timeout)
             return 0 if halted else 1
+        if args.riscv_tests:
+            return do_riscv_tests(board, repo_root, args.timeout)
         if args.regress:
             return do_regress(board, repo_root, args.timeout)
     except Rv32Error as exc:
