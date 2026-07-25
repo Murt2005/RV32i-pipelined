@@ -13,6 +13,7 @@ memory_io_rsp   data_mem_rsp;
 core the_core(
 	.clk(clk)
 	,.reset(reset)
+	,.stall(1'b0)               // simulation memories always accept a write
     ,.reset_pc(32'h0001_0000)
 	,.inst_mem_req(inst_mem_req)
 	,.inst_mem_rsp(inst_mem_rsp)

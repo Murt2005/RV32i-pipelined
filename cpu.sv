@@ -624,6 +624,7 @@ endmodule
 // Currently no hazard or mispredict handling; all stages always advance.
 // ---------------------------------------------------------------------------
 module control(
+    input logic stall,
     input memory_io_rsp instruction_memory_response,
     input memory_io_rsp data_memory_response,
     input pc_control_t pc_control_in,
@@ -713,6 +714,37 @@ always_comb begin
             decode_control_signal_out.flush = true;
         end
     end
+
+    // ------------------------------------------------------------------
+    // 3. EXTERNAL STALL (highest priority, overrides everything above)
+    //
+    // Backpressure from a memory-mapped peripheral that cannot accept another
+    // write yet (the board's UART transmitter). The memory_io interface has no
+    // way to express "not ready", so the front of the pipeline is frozen
+    // instead.
+    //
+    // This takes exactly the same shape as the load-use stall above: freeze
+    // fetch, decode and execute, and let memory and writeback drain. Two
+    // reasons it must be this shape and not a whole-pipeline freeze:
+    //
+    //   * Correctness. The store already in EX/MEM issues its request once and
+    //     EX/MEM then takes a bubble (execute is not advancing while memory
+    //     is), so the peripheral sees each write exactly once. The instruction
+    //     in ID/EX is re-decoded when the stall lifts, because the fetch latch
+    //     still holds it.
+    //   * Timing. Gating memory_control_signal_out.advance with `stall` would
+    //     put the peripheral's own full/empty flag on a combinational path
+    //     through the whole control block and back out through the memory
+    //     stage's request -- a loop through the peripheral that measured
+    //     112 ns and capped the design at 8.9 MHz.
+    // ------------------------------------------------------------------
+    if (stall) begin
+        fetch_control_signal_out.advance = false;
+        decode_control_signal_out.advance = false;
+        execute_control_signal_out.advance = false;
+        decode_control_signal_out.flush = false;
+        branch_pc_redirect_request_out.is_pc_valid = false;
+    end
 end
 endmodule
 
@@ -724,6 +756,7 @@ module core #(
 ) (
     input logic       clk,
     input logic       reset,
+    input logic       stall,          // freeze the whole pipeline (peripheral backpressure)
     input logic       [`word_address_size-1:0] reset_pc,
     output memory_io_req   inst_mem_req,
     input  memory_io_rsp   inst_mem_rsp,
@@ -810,6 +843,7 @@ writeback writeback_m(
 );
 
 control control_m(
+    .stall(stall),
     .instruction_memory_response(inst_mem_rsp),
     .data_memory_response(data_mem_rsp),
     .pc_control_in(pc_control),
