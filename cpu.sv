@@ -459,6 +459,7 @@ always_comb begin
     // Next PC: for non-control-flow instructions this is PC+4; for branches/jumps it is the target.
     next_pc_comb = compute_next_pc(
         cast_to_ext_operand(rd1),
+        cast_to_ext_operand(rd2),
         execute_result_comb,
         decoded_instruction_in.imm,
         decoded_instruction_in.pc,

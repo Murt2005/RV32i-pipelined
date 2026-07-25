@@ -59,9 +59,42 @@ t04_bge_taken_greater:
     li      t2, 1                   # flushed
 t04_taken:
     ASSERT_EQ_REG_IMM t2, 0, t04_fail
-    TEST_PASS all_done
+    TEST_PASS t05_signed_overflow
 
 t04_fail:
+    TEST_FAIL t05_signed_overflow
+
+t05_signed_overflow:
+    TEST_BEGIN msg_t05
+    # BLT where the signed subtraction overflows 32 bits. Using the sign bit of
+    # a truncated (in1 - in2) gets this wrong: 0x8534F457 is negative and
+    # 0x2C33BE0A is positive, so the branch must be taken, but the difference
+    # wraps to a positive value.
+    li      t0, 0x8534F457
+    li      t1, 0x2C33BE0A
+    li      t3, 99
+    blt     t0, t1, t05_taken
+    li      t3, 0                    # wrong path
+t05_taken:
+    ASSERT_EQ_REG_IMM t3, 99, t05_fail
+    TEST_PASS t06_signed_overflow_bge
+
+t05_fail:
+    TEST_FAIL t06_signed_overflow_bge
+
+t06_signed_overflow_bge:
+    TEST_BEGIN msg_t06
+    # Same operands the other way round: positive >= negative must be true.
+    li      t0, 0x2C33BE0A
+    li      t1, 0x8534F457
+    li      t3, 99
+    bge     t0, t1, t06_taken
+    li      t3, 0
+t06_taken:
+    ASSERT_EQ_REG_IMM t3, 99, t06_fail
+    TEST_PASS all_done
+
+t06_fail:
     TEST_FAIL all_done
 
 all_done:
@@ -76,6 +109,8 @@ msg_done: .asciz "All tests in branch_signed complete.\n"
 msg_t01: .asciz "Test 01: BLT taken (-3 < 5)"
 msg_t02: .asciz "Test 02: BLT not taken (10 < -1)"
 msg_t03: .asciz "Test 03: BGE taken (equal)"
+msg_t05: .asciz "Test 05: BLT with signed overflow"
+msg_t06: .asciz "Test 06: BGE with signed overflow"
 msg_t04: .asciz "Test 04: BGE taken (0 >= -100)"
 
 .include "tests/common/test_runtime.s"
