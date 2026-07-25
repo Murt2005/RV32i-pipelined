@@ -77,7 +77,7 @@ Run one test: `make run-test-<name>-iverilog` (e.g. `run-test-isa-add_sub-iveril
 | File | Description |
 |------|-------------|
 | **RTL (SystemVerilog)** | |
-| `itop.sv` | Icarus Verilog testbench: clk/reset/halt, `$dumpvars`, includes `top.sv`. |
+| `itop.sv` | Icarus Verilog testbench: clk/reset/halt, includes `top.sv`. Waveforms are opt-in (`+vcd`), and a watchdog stops a runaway program (`+timeout=<cycles>`, default 500000). |
 | `top.sv` | Top-level: instantiates core + code memory + data memory; MMIO putchar/halt. |
 | `cpu.sv` | Pipeline core: modules `fetch`, `decode_and_writeback`, `execute`, `memory`, `writeback`, `control`. |
 | `riscv.sv` | Package wrapper; includes `riscv32_common.sv` (or 64-bit). |

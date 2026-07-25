@@ -1,3 +1,6 @@
 [submodule "firmware/pico-ice-sdk"]
 	path = firmware/pico-ice-sdk
 	url = https://github.com/tinyvision-ai-inc/pico-ice-sdk
+[submodule "tests/riscv-tests"]
+	path = tests/riscv-tests
+	url = https://github.com/riscv-software-src/riscv-tests
