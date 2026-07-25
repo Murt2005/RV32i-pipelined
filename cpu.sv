@@ -254,7 +254,11 @@ module decode_and_writeback(
 
 import riscv::*;
 
-// Register file and bypass state
+// Register file and bypass state.
+// ram_style forces the 32x32 file into block RAM on iCE40. Left in logic it
+// costs ~1024 FFs plus two 32:1 x 32-bit read muxes, which is the difference
+// between fitting on a UP5K and not. Ignored by simulators.
+(* ram_style = "block" *)
 word register_file[0:31];
 word register_file_bypass_rd;
 tag register_file_bypass_rs;
@@ -316,16 +320,16 @@ always_ff @(posedge clk) begin
     end
 
     // Register file read: when we advance with a valid instruction, latch the read data.
-    // Use same-cycle bypass from writeback when writeback is writing to rs1/rs2 this cycle.
+    //
+    // This is deliberately a *plain* synchronous read with no mux on the output
+    // register, so it maps onto a block RAM. The write-back-during-decode case
+    // it used to handle here is already covered one stage later by execute's
+    // level-2 bypass (register_file_bypass_in), which is registered from the
+    // very same write-back event and lands on exactly the cycle this
+    // instruction reaches execute.
     if (decode_control_signal_in.advance && fetched_instruction_in.is_instruction_valid) begin
-        if (writeback_control_signal_in.advance && writeback_instruction_in.is_instruction_valid && writeback_instruction_in.is_writeback_valid && rs1 == writeback_instruction_in.wbs)
-            decoded_instruction_out.rd1 <= writeback_instruction_in.wbd;
-        else
-            decoded_instruction_out.rd1 <= register_file[rs1];
-        if (writeback_control_signal_in.advance && writeback_instruction_in.is_instruction_valid && writeback_instruction_in.is_writeback_valid && rs2 == writeback_instruction_in.wbs)
-            decoded_instruction_out.rd2 <= writeback_instruction_in.wbd;
-        else
-            decoded_instruction_out.rd2 <= register_file[rs2];
+        decoded_instruction_out.rd1 <= register_file[rs1];
+        decoded_instruction_out.rd2 <= register_file[rs2];
     end
 
     // Write-back: commit result from writeback stage into register file and set bypass
