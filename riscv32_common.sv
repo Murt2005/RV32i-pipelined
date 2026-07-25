@@ -2,6 +2,13 @@
 `define enable_ext_m        1
 `define tag_size            5
 
+// Package-local alias. `bool` is also declared at compilation-unit scope in
+// base.sv, but $unit types are not visible inside a package. Icarus has `bool`
+// built in, so it must not be redeclared there.
+`ifndef __ICARUS__
+typedef logic bool;
+`endif
+
 typedef logic [`tag_size - 1:0]             tag;
 typedef logic [4:0]                         shamt;
 typedef logic [31:0]                        instr32;
@@ -24,9 +31,9 @@ typedef enum {
 
 function automatic bool is_16bit_instruction(logic [31:0] instr);
     if (instr[1:0] == 2'b11)
-        return false;
+        return 1'b0;
     else
-        return true;
+        return 1'b1;
 endfunction
 
 ////// 32 bit instruction decode helpers.
@@ -176,8 +183,8 @@ endfunction
 
 function automatic bool decode_writeback(opcode_q in);
     case (in)
-        q_load, q_jalr, q_jal, q_op_imm, q_op, q_auipc, q_lui:  return true;
-        default: return false;
+        q_load, q_jalr, q_jal, q_op_imm, q_op, q_auipc, q_lui:  return 1'b1;
+        default: return 1'b0;
     endcase
 endfunction
 
@@ -233,7 +240,7 @@ typedef enum logic [2:0] {
 }   branch_ops;
 
 function automatic bool take_branch(ext_operand alu_result, funct3 f3); begin
-    logic is_zero = (alu_result[31:0] == 32'd0) ? true : false;
+    logic is_zero = (alu_result[31:0] == 32'd0) ? 1'b1 : 1'b0;
 
     case (f3)
         beq:    return is_zero;
@@ -243,7 +250,7 @@ function automatic bool take_branch(ext_operand alu_result, funct3 f3); begin
         bltu:   return alu_result[`word_size];  // (pos_in1 < pos_in2) ? true : false;
         bgeu:   return !alu_result[`word_size]; //(pos_in1 >= pos_in2) ? true : false;
         default:
-            return false;
+            return 1'b0;
     endcase
 end
 endfunction

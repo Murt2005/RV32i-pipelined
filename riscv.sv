@@ -2,6 +2,7 @@
 `define riscv_common_pkg
 
 `include "system.sv"
+`include "base.sv"
 
 package riscv;
 `ifdef __64bit__
