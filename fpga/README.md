@@ -4,8 +4,9 @@ The five-stage RV32I core from this repo, running on the pico2-ice's
 iCE40UP5K. Programs are loaded over USB at run time; one bitstream runs any
 program the normal build flow produces.
 
-Status: all 19 tests under `tests/` pass on hardware with output byte-identical
-to the Icarus simulation, as does the `test.c` C benchmark.
+Status: on hardware, all 19 tests under `tests/` pass with output byte-identical
+to the Icarus simulation, all 40 official `rv32ui` riscv-tests pass, and 600
+random programs match a reference model instruction for instruction.
 
 ```
 Host PC ──USB──► RP2350 ──► iCE40UP5K
@@ -35,6 +36,8 @@ cd fpga/ice40 && make prog
 python3 host/rv32_host.py --probe
 python3 host/rv32_host.py --elf build/tests/isa/add_sub.elf
 python3 host/rv32_host.py --regress       # all tests, diffed against simulation
+python3 host/rv32_host.py --riscv-tests   # official rv32ui suite (make riscv-tests first)
+python3 host/rv32_diff.py --iters 200     # random programs vs the reference model
 ```
 
 After the first firmware flash you never need BOOTSEL again: opening the CDC
@@ -55,6 +58,8 @@ of `ice_fpga_start()`, which returns 0 unconditionally without polling CDONE.
 | `fpga/ice40/sim/` | Board-level testbench: same RTL, behavioural SPRAM, UART host model |
 | `firmware/main.c` | RP2350 bridge |
 | `host/rv32_host.py` | Loader / runner / regression driver |
+| `host/rv32_model.py` | Reference RV32I interpreter (no pipeline, shares no structure with the RTL) |
+| `host/rv32_diff.py` | Random program generator + differential test driver |
 
 The core (`cpu.sv`) stays board-neutral. The only thing the board added to it
 is a generic `stall` input; everything else talks over the existing
@@ -182,6 +187,15 @@ resumes at the wrong address. It is unreachable with only the load-use stall
 (ID/EX is flushed after a redirect, so the load-use condition cannot fire), but
 an externally timed stall hits it. `fetch` now picks the realign target based
 on what is actually in flight.
+
+**Differential testing found a real bug that riscv-tests could not.** The
+branch ALU zero-extends both operands into a 33-bit subtract; `blt` then read
+bit 31, which is the sign of the *truncated* difference and is wrong whenever
+the signed subtraction overflows. Bit 32 is the unsigned borrow, so signed
+less-than is that xor'd with both operand sign bits. `blt.S` in riscv-tests
+only uses operands in -2..1, where the subtraction can never overflow, so the
+official suite passes with the bug present. `tests/isa/branch_signed.s` now
+covers it directly.
 
 **Hardware and simulation must start from the same memory.** `memory.sv` zeroes
 its arrays in an `initial` block, so every simulated run begins with all-zero
