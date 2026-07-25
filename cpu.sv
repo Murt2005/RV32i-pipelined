@@ -119,11 +119,17 @@ module fetch(
 import riscv::*;
 
 word fetch_pc;
-bool clear_fetch_stream;                    
+bool clear_fetch_stream;
 word clear_to_this_pc;
 instr32 latched_instruction_read;
 bool latched_instruction_valid;
 word latched_instruction_pc;
+
+// Address of the request issued in the previous cycle -- i.e. the response
+// arriving right now, which a stall would drop. Needed to realign correctly
+// when nothing is latched yet (see the stall handling below).
+word issued_pc;
+bool issued_valid;
 
 // Combinational: instruction memory request and fetch output
 always @(*) begin
@@ -159,7 +165,12 @@ always_ff @(posedge clk) begin
         latched_instruction_valid <= false;
         clear_fetch_stream <= false;
         clear_to_this_pc <= 0;
+        issued_pc <= 0;
+        issued_valid <= false;
     end else begin
+        issued_valid <= instruction_memory_request.valid;
+        if (instruction_memory_request.valid)
+            issued_pc <= fetch_pc;
         // if we receive a valid response from instruction memory, either discard or latch it if we can advance
         if (instruction_memory_response.valid) begin
             if (clear_fetch_stream && instruction_memory_response.addr != clear_to_this_pc) begin
@@ -188,11 +199,32 @@ always_ff @(posedge clk) begin
             clear_fetch_stream <= true;
             clear_to_this_pc <= branch_pc_redirect_request_in.pc;
         end else if (!fetch_control_signal_in.advance) begin
-            // if decode is stalled, realign PC to instruction after latched instruction
-            // so we have correct next instruction after the stall clears.
-            fetch_pc <= latched_instruction_pc + 4;
-            clear_fetch_stream <= true;
-            clear_to_this_pc <= latched_instruction_pc + 4;
+            // Decode is stalled, so no request goes out and this cycle's
+            // response is dropped. Realign the PC to whatever we must re-fetch
+            // once the stall clears. Which address that is depends on what is
+            // in flight, and getting it wrong silently resumes at the wrong
+            // instruction:
+            if (latched_instruction_valid) begin
+                // Normal case. The latched instruction is re-presented to
+                // decode, so the stream restarts after it.
+                fetch_pc <= latched_instruction_pc + 4;
+                clear_fetch_stream <= true;
+                clear_to_this_pc <= latched_instruction_pc + 4;
+            end else if (clear_fetch_stream) begin
+                // A redirect is still resolving: nothing is latched and the
+                // in-flight response is wrong-path. fetch_pc / clear_to_this_pc
+                // already name the target, so hold them. Without this the
+                // realign above would overwrite a freshly applied branch target
+                // with a stale latched_instruction_pc + 4.
+                fetch_pc <= clear_to_this_pc;
+                clear_fetch_stream <= true;
+            end else if (issued_valid) begin
+                // Nothing latched and no redirect pending: re-issue the request
+                // whose response we are dropping.
+                fetch_pc <= issued_pc;
+                clear_fetch_stream <= true;
+                clear_to_this_pc <= issued_pc;
+            end
         end
     end
 end
