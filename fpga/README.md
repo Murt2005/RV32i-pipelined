@@ -99,6 +99,7 @@ idle state so idle filler is harmless.
 | `P` 0x50 | ping | `p` 0x70, version |
 | `Z` 0x5A | zero both memories | `z` 0x7A |
 | `W` 0x57 | write: `addr[4] len[2] data[len]` | `w` 0x77 |
+| `R` 0x52 | read: `addr[4] len[2]` | `r` 0x72, then `len` bytes |
 | `G` 0x47 | go | `g` 0x67, then program output until `0x04` (EOT) |
 | `H` 0x48 | halt | `h` 0x68 |
 | `S` 0x53 | status | `s` 0x73, `{5'b0, uart_err, halted, running}` |

@@ -39,6 +39,7 @@ CMD_NOP    = 0x00
 CMD_PING   = 0x50   # 'P' -> 0x70, VERSION
 CMD_ZERO   = 0x5A   # 'Z' -> 0x7A
 CMD_WRITE  = 0x57   # 'W' -> addr[4] len[2] data...,  then 0x77
+CMD_READ   = 0x52   # 'R' -> addr[4] len[2],  then 0x72 and len bytes
 CMD_GO     = 0x47   # 'G' -> 0x67, then program output until EOT
 CMD_HALT   = 0x48   # 'H' -> 0x68
 CMD_STATUS = 0x53   # 'S' -> 0x73, status byte
@@ -46,12 +47,13 @@ CMD_STATUS = 0x53   # 'S' -> 0x73, status byte
 RSP_PING   = 0x70
 RSP_ZERO   = 0x7A
 RSP_WRITE  = 0x77
+RSP_READ   = 0x72
 RSP_GO     = 0x67
 RSP_HALT   = 0x68
 RSP_STATUS = 0x73
 EOT        = 0x04
 
-PROTO_VERSION = 0x02
+PROTO_VERSION = 0x03
 
 BAUD = 500000          # must equal BAUD_RATE in fpga/ice40/Makefile
 
@@ -164,6 +166,24 @@ class Rv32Board:
             self.ser.write(hdr + chunk)
             self.ser.flush()
             self._expect(RSP_WRITE, f"write ack @0x{base:08x}")
+
+    def read_mem(self, addr, nbytes):
+        """Read memory back. Used to compare state against a reference model."""
+        out = bytearray()
+        for off in range(0, nbytes, CHUNK):
+            n = min(CHUNK, nbytes - off)
+            base = addr + off
+            self.ser.write(bytes([CMD_READ,
+                                  base & 0xFF, (base >> 8) & 0xFF,
+                                  (base >> 16) & 0xFF, (base >> 24) & 0xFF,
+                                  n & 0xFF, (n >> 8) & 0xFF]))
+            self.ser.flush()
+            self._expect(RSP_READ, f"read ack @0x{base:08x}")
+            chunk = self.ser.read(n)
+            if len(chunk) != n:
+                raise Rv32Error(f"read @0x{base:08x}: got {len(chunk)} of {n} bytes")
+            out += chunk
+        return bytes(out)
 
     def go(self, run_timeout=15.0):
         """Release the core and collect its output up to the halt sentinel."""

@@ -31,6 +31,7 @@
 //   'P' 0x50    ping        -> 'p', VERSION
 //   'Z' 0x5A    zero memory -> 'z'  (clears both 64 KiB memories)
 //   'W' 0x57    write       -> addr[4], len[2], len data bytes, then 'w'
+//   'R' 0x52    read        -> addr[4], len[2], then 'r' and len data bytes
 //   'G' 0x47    go          -> 'g', then raw program output until 0x04 (EOT)
 //   'H' 0x48    halt        -> 'h'
 //   'S' 0x53    status      -> 's', {6'b0, halted, running}
@@ -52,7 +53,7 @@ module rv32_top #(
 
     localparam int CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;
 
-    localparam [7:0] VERSION      = 8'h02;
+    localparam [7:0] VERSION      = 8'h03;
     localparam [7:0] EOT          = 8'h04;
     localparam [31:0] MMIO_PUTCHAR = 32'h0002_FFF8;
     localparam [31:0] MMIO_HALT    = 32'h0002_FFFC;
@@ -185,14 +186,18 @@ module rv32_top #(
     // -----------------------------------------------------------------------
     // Host loader / command FSM
     // -----------------------------------------------------------------------
-    typedef enum logic [2:0] {
-        S_IDLE  = 3'd0,
-        S_ADDR  = 3'd1,
-        S_LEN   = 3'd2,
-        S_DATA  = 3'd3,
-        S_RESP1 = 3'd4,
-        S_RESP2 = 3'd5,
-        S_ZERO  = 3'd6
+    typedef enum logic [3:0] {
+        S_IDLE   = 4'd0,
+        S_ADDR   = 4'd1,
+        S_LEN    = 4'd2,
+        S_DATA   = 4'd3,
+        S_RESP1  = 4'd4,
+        S_RESP2  = 4'd5,
+        S_ZERO   = 4'd6,
+        S_RD_ACK = 4'd7,    // emit 'r' before the payload so the host can sync
+        S_RD_REQ = 4'd8,    // issue the word read
+        S_RD_WAIT= 4'd9,    // memory response lands the next cycle
+        S_RD_PUSH= 4'd10    // hand one byte to the transmit queue
     } ldr_state_t;
 
     ldr_state_t   state;
@@ -212,6 +217,13 @@ module rv32_top #(
     logic         zeroing;
     logic [13:0]  zero_addr;
 
+    // Memory read-back. Needed to compare architectural state against a
+    // reference model; the protocol was write-only before.
+    logic         cmd_is_read;
+    logic         rd_from_inst;
+    logic [31:0]  rd_word;
+    logic         rd_ready;
+
     // Loader-issued memory write, pulsed for a single cycle.
     memory_io_req ldr_req;
     logic         ldr_to_inst;
@@ -228,6 +240,7 @@ module rv32_top #(
         txq_push   = 1'b0;
         txq_din    = 8'h00;
         resp_ready = 1'b0;
+        rd_ready   = 1'b0;
 
         if (mmio_putchar) begin
             txq_push = 1'b1;
@@ -239,6 +252,15 @@ module rv32_top #(
             txq_push   = 1'b1;
             txq_din    = (state == S_RESP1) ? resp0 : resp1;
             resp_ready = 1'b1;
+        end else if (!txq_full && state == S_RD_ACK) begin
+            txq_push = 1'b1;
+            txq_din  = 8'h72;                       // 'r', ahead of the payload
+            rd_ready = 1'b1;
+        end else if (!txq_full && state == S_RD_PUSH) begin
+            // Select the byte lane the way the memory lays a word out.
+            txq_push = 1'b1;
+            txq_din  = rd_word[{load_addr[1:0], 3'b000} +: 8];
+            rd_ready = 1'b1;
         end
     end
 
@@ -257,6 +279,9 @@ module rv32_top #(
             rx_err_count  <= 8'd0;
             zeroing       <= 1'b0;
             zero_addr     <= 14'd0;
+            cmd_is_read   <= 1'b0;
+            rd_from_inst  <= 1'b0;
+            rd_word       <= 32'd0;
             ldr_req       <= memory_io_no_req;
         end else begin
             ldr_req.valid <= 1'b0;      // single-cycle pulse
@@ -288,6 +313,11 @@ module rv32_top #(
                                 state     <= S_ZERO;
                             end
                             8'h57: begin                 // 'W' write
+                                cmd_is_read <= 1'b0;
+                                byte_idx <= 2'd0; state <= S_ADDR;
+                            end
+                            8'h52: begin                 // 'R' read
+                                cmd_is_read <= 1'b1;
                                 byte_idx <= 2'd0; state <= S_ADDR;
                             end
                             8'h47: begin                 // 'G' go
@@ -335,10 +365,13 @@ module rv32_top #(
                         end else begin
                             load_len[15:8] <= rx_data;
                             byte_idx       <= 2'd0;
-                            // A zero-length write is a no-op, ack immediately.
+                            // A zero-length transfer is a no-op, ack only.
                             if ({rx_data, load_len[7:0]} == 16'd0) begin
-                                resp0 <= 8'h77; resp_two <= 1'b0;
+                                resp0 <= cmd_is_read ? 8'h72 : 8'h77;
+                                resp_two <= 1'b0;
                                 state <= S_RESP1;
+                            end else if (cmd_is_read) begin
+                                state <= S_RD_ACK;
                             end else begin
                                 state <= S_DATA;
                             end
@@ -375,6 +408,40 @@ module rv32_top #(
                         zeroing <= 1'b0;
                         resp0 <= 8'h7A; resp_two <= 1'b0;   // 'z'
                         state <= S_RESP1;
+                    end
+                end
+
+                // 'r' goes out first so the host can resynchronise before the
+                // payload, then one byte per word read.
+                S_RD_ACK: begin
+                    if (rd_ready)
+                        state <= S_RD_REQ;
+                end
+
+                S_RD_REQ: begin
+                    ldr_req.valid    <= 1'b1;
+                    ldr_req.addr     <= load_addr;
+                    ldr_req.do_read  <= 4'b1111;
+                    ldr_req.do_write <= 4'b0000;
+                    ldr_req.user_tag <= '0;
+                    rd_from_inst     <= (load_addr[19:16] == 4'h1);
+                    state            <= S_RD_WAIT;
+                end
+
+                S_RD_WAIT: begin
+                    // memory_spram answers exactly one cycle after the request.
+                    if (rd_from_inst ? inst_rsp.valid : data_rsp.valid) begin
+                        rd_word <= rd_from_inst ? inst_rsp.data : data_rsp.data;
+                        state   <= S_RD_PUSH;
+                    end
+                end
+
+                S_RD_PUSH: begin
+                    if (rd_ready) begin
+                        load_addr <= load_addr + 32'd1;
+                        load_len  <= load_len - 16'd1;
+                        if (load_len == 16'd1) state <= S_IDLE;
+                        else                   state <= S_RD_REQ;
                     end
                 end
 

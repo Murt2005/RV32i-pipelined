@@ -185,7 +185,7 @@ module tb_rv32_top();
         send_byte(8'h00);                        // NOP, must be ignored
         send_byte(8'h50);                        // 'P'
         expect_byte(8'h70, "ping reply");
-        expect_byte(8'h02, "version");
+        expect_byte(8'h03, "version");
         $display("PING ok");
 
         send_byte(8'h5A);                        // 'Z' zero both memories
@@ -195,6 +195,23 @@ module tb_rv32_top();
         write_region(32'h0001_0000, code_bytes, 1);
         write_region(32'h0002_0000, data_bytes, 0);
         $display("LOAD ok");
+
+        // Read back the first 8 bytes of the program image and check they
+        // match what was written, exercising the 'R' path before the run.
+        send_byte(8'h52);                        // 'R'
+        send_byte(8'h00); send_byte(8'h00); send_byte(8'h01); send_byte(8'h00);
+        send_byte(8'h08); send_byte(8'h00);
+        expect_byte(8'h72, "read ack");
+        for (int k = 0; k < 8; k = k + 1) begin
+            logic [7:0] got;
+            recv_byte(got);
+            if (got !== img_byte(1, k)) begin
+                $display("FATAL: readback[%0d]: expected %02x got %02x",
+                         k, img_byte(1, k), got);
+                $fatal(1);
+            end
+        end
+        $display("READBACK ok");
 
         send_byte(8'h47);                        // 'G'
         expect_byte(8'h67, "go reply");
