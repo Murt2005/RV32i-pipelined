@@ -47,13 +47,18 @@
  * divisor is a synthesis-time constant, so a mismatch garbles bytes rather
  * than producing silence.
  *
- * 6 MHz, not the SDK's 48 MHz default: this design's post-place-and-route fMax
- * is 8.4 MHz, and 6 MHz is an exact integer division of the 12 MHz crystal, so
- * ice_fpga_init() sources it straight from XOSC with a clean 50% duty cycle.
- * 500000 baud is then an exact /12 of 6 MHz.
+ * 12 MHz, not the SDK's 48 MHz default: it is the crystal frequency exactly, so
+ * ice_fpga_init() passes XOSC straight through with divisor 1 and a clean 50%
+ * duty cycle -- no fractional divider, so no jitter on the FPGA's only clock.
+ * 1 Mbaud is then an exact /12 of it.
+ *
+ * The design's post-place-and-route fMax is 13.1 MHz, so this runs with about
+ * 9% static margin. That is thinner than ideal, which is why the 12 MHz build
+ * is validated on silicon (full regression plus randomised differential
+ * testing) rather than on the timing estimate alone.
  */
-#define FPGA_CLK_HZ   AS_MHZ(6)
-#define FPGA_BAUD     500000
+#define FPGA_CLK_HZ   AS_MHZ(12)
+#define FPGA_BAUD     1000000
 
 /* Declared in ice_fpga.c but not exported by ice_fpga.h. */
 extern int ice_fpga_configured(const ice_fpga fpga);

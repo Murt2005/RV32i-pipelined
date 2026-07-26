@@ -184,6 +184,39 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 	[ $$fail -eq 0 ]
 
 # --------------------------------------------------------------------
+# Dhrystone. The benchmark sources are copied unmodified from
+# tests/riscv-tests/benchmarks/dhrystone (a number is only comparable if the
+# benchmark is); tests/bench/dhrystone/port.c supplies what this bare-metal
+# machine does not already have, and rv_env.h replaces the riscv-tests util.h.
+#
+# Timing comes from the mcycle CSR, which dhrystone.h already selects for
+# __riscv. -O2 with the source's own no-inline pragma is the conventional
+# Dhrystone build.
+# --------------------------------------------------------------------
+DHRY_DIR  := tests/bench/dhrystone
+DHRY_OUT  := build/tests/bench/dhrystone
+DHRY_FLAGS := -march=rv32i -mabi=ilp32 -O2 -Ilibmc -I$(DHRY_DIR) \
+              -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
+              -Wno-implicit-int -Wno-return-type
+DHRY_OBJS := $(DHRY_OUT)/start.o $(DHRY_OUT)/dhrystone.o \
+             $(DHRY_OUT)/dhrystone_main.o $(DHRY_OUT)/port.o
+
+.PHONY: dhrystone
+
+$(DHRY_OUT)/start.o: start.s
+	mkdir -p $(dir $@)
+	$(AS) $(SSFLAGS) -c $< -o $@
+
+$(DHRY_OUT)/%.o: $(DHRY_DIR)/%.c $(DHRY_DIR)/dhrystone.h $(DHRY_DIR)/rv_env.h
+	mkdir -p $(dir $@)
+	$(CC) $(DHRY_FLAGS) -c $< -o $@
+
+$(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) tests/bench/link.ld
+	$(LD) --script tests/bench/link.ld -o $@ $(DHRY_OBJS) $(LDPOSTFLAGS)
+
+dhrystone: $(DHRY_OUT)/dhrystone.elf
+
+# --------------------------------------------------------------------
 # Line/toggle coverage over both suites, via Verilator.
 # --------------------------------------------------------------------
 .PHONY: coverage

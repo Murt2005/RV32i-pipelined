@@ -59,7 +59,8 @@ EOT        = 0x04
 
 PROTO_VERSION = 0x05
 
-BAUD = 500000          # must equal BAUD_RATE in fpga/ice40/Makefile
+BAUD = 1000000         # must equal BAUD_RATE in fpga/ice40/Makefile
+CLK_HZ = 12_000_000    # must equal CLK_FREQ in fpga/ice40/Makefile
 
 TEXT_BASE = 0x00010000
 DATA_BASE = 0x00020000
@@ -248,7 +249,10 @@ def elf_to_images(elf_path, objcopy=None):
     tmp = f"/tmp/rv32_host_{os.getpid()}"
     try:
         text = run(["-j", ".text", "-O", "binary"], tmp + ".text")
-        data = run(["-R", ".text", "-O", "binary"], tmp + ".data")
+        # .bss is excluded deliberately: it is zero by definition and the Z
+        # command has already cleared memory, so including it would pad the
+        # image to the top of .bss -- 60 KB for a benchmark with a 10 KB array.
+        data = run(["-R", ".text", "-R", ".bss", "-O", "binary"], tmp + ".data")
     finally:
         for suffix in (".text", ".data"):
             try:
@@ -463,8 +467,50 @@ def do_bench(board, elf, timeout):
     print(f"cycles   : {cycles}")
     print(f"retired  : {retired}")
     print(f"IPC      : {retired / cycles:.3f}")
-    print(f"at 6 MHz : {cycles / 6e6 * 1e3:.2f} ms, "
-          f"{retired / (cycles / 6e6) / 1e6:.2f} MIPS")
+    print(f"at {CLK_HZ/1e6:.0f} MHz: {cycles / CLK_HZ * 1e3:.2f} ms, "
+          f"{retired / (cycles / CLK_HZ) / 1e6:.2f} MIPS")
+    return 0
+
+
+DHRYSTONE_ELF = "build/tests/bench/dhrystone/dhrystone.elf"
+# 1 DMIPS is 1757 Dhrystones/second, the VAX 11/780 reference.
+VAX_DHRYSTONES = 1757.0
+
+
+def do_dhrystone(board, repo_root, timeout):
+    elf = os.path.join(repo_root, DHRYSTONE_ELF)
+    if not os.path.exists(elf):
+        print("run `make dhrystone` first", file=sys.stderr)
+        return 2
+
+    out, halted = run_elf(board, elf, timeout=max(timeout, 60), quiet=True)
+    text = out.decode("utf-8", errors="replace")
+    if not halted:
+        print("dhrystone did not halt", file=sys.stderr)
+        return 1
+
+    fields = {}
+    for line in text.splitlines():
+        for key in ("CYCLES", "RUNS"):
+            if line.startswith(key + "="):
+                fields[key] = int(line.split("=", 1)[1])
+    if "CYCLES" not in fields or "RUNS" not in fields:
+        print(text, file=sys.stderr)
+        print("could not find CYCLES/RUNS in the output", file=sys.stderr)
+        return 1
+
+    cycles, runs = fields["CYCLES"], fields["RUNS"]
+    cycles_per_run = cycles / runs
+    # Dhrystone's own report normalises to 1 MHz, so this is per-MHz directly.
+    dhry_per_sec_per_mhz = 1e6 / cycles_per_run
+    dmips_per_mhz = dhry_per_sec_per_mhz / VAX_DHRYSTONES
+    mhz = CLK_HZ / 1e6
+
+    print(f"runs             : {runs}")
+    print(f"cycles           : {cycles}  ({cycles_per_run:.0f} per run)")
+    print(f"Dhrystones/s     : {dhry_per_sec_per_mhz * mhz:.0f}  at {mhz:.0f} MHz")
+    print(f"DMIPS            : {dmips_per_mhz * mhz:.2f}")
+    print(f"DMIPS/MHz        : {dmips_per_mhz:.3f}")
     return 0
 
 
@@ -522,14 +568,17 @@ def main():
                     help="run the official rv32ui suite from build/riscv-tests")
     ap.add_argument("--bench", metavar="ELF",
                     help="run a counter-sampling workload and report IPC")
+    ap.add_argument("--dhrystone", action="store_true",
+                    help="run Dhrystone and report DMIPS/MHz")
     ap.add_argument("--timeout", type=float, default=15.0,
                     help="seconds to wait for the halt sentinel")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
     if not (args.elf or args.probe or args.regress or args.riscv_tests
-            or args.bench):
-        ap.error("give one of --elf, --probe, --regress, --riscv-tests or --bench")
+            or args.bench or args.dhrystone):
+        ap.error("give one of --elf, --probe, --regress, --riscv-tests, "
+                 "--bench or --dhrystone")
 
     try:
         board = open_board(args.port, verbose=args.verbose)
@@ -544,6 +593,8 @@ def main():
         if args.elf:
             _, halted = run_elf(board, args.elf, timeout=args.timeout)
             return 0 if halted else 1
+        if args.dhrystone:
+            return do_dhrystone(board, repo_root, args.timeout)
         if args.bench:
             return do_bench(board, args.bench, args.timeout)
         if args.riscv_tests:

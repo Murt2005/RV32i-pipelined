@@ -105,6 +105,7 @@ reachable pipeline state rather than the ones a test happened to pick.
 | `make test` | Build `test` ELF and generate `*.hex` (code/data) in project root. |
 | `make run-test-<name>-iverilog` | Build ELF for `tests/<name>.s` (e.g. `isa/add_sub` → `run-test-isa-add_sub-iverilog`), run that test under Icarus. |
 | `make run-tests-iverilog` | Run all tests under `tests/isa/` and `tests/hazards/`. |
+| `make dhrystone` | Build the Dhrystone benchmark into `build/tests/bench/dhrystone/`. |
 | `make riscv-tests` | Build the official riscv-tests `rv32ui` suite into `build/riscv-tests/`. |
 | `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus (local environment). |
 | `make run-riscv-tests-p-iverilog` | Run the same tests under the suite's **stock `p` environment**. |

@@ -3,8 +3,9 @@
 #
 # CLK_FREQ MUST equal the frequency the firmware passes to ice_fpga_init().
 # The UART divisor is a synthesis-time constant, so a mismatch garbles bytes
-# rather than producing silence (gotcha G4). Both are 12 MHz here; if you change
-# one, change the other and reflash both images.
+# rather than producing silence. 12 MHz is the crystal frequency exactly, so
+# ice_fpga_init() passes XOSC straight through with divisor 1, and 1 Mbaud is an
+# exact /12 of it. If you change one, change the other and reflash both images.
 # ---------------------------------------------------------------------------
 
 TOP        := rv32_top
@@ -15,8 +16,8 @@ ROOT       := ../..
 # refuse to talk to a stale one. The file list is shared with rv32_host.py.
 BUILD_ID   := $(shell cat $$(cat rtl-sources.txt) | shasum -a 256 | cut -c1-8)
 
-CLK_FREQ   ?= 6000000
-BAUD_RATE  ?= 500000
+CLK_FREQ   ?= 12000000
+BAUD_RATE  ?= 1000000
 
 BUILD      := build
 

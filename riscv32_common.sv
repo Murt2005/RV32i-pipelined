@@ -258,6 +258,14 @@ localparam [11:0] csr_mepc    = 12'h341;
 localparam [11:0] csr_mcause  = 12'h342;
 localparam [11:0] csr_mtval   = 12'h343;
 
+// Machine counters, read-only. Software needs a cycle count to benchmark
+// itself, and rdcycle/mcycle is how it expects to get one -- Dhrystone's
+// riscv variant reads mcycle directly.
+localparam [11:0] csr_mcycle    = 12'hB00;
+localparam [11:0] csr_minstret  = 12'hB02;
+localparam [11:0] csr_mcycleh   = 12'hB80;
+localparam [11:0] csr_minstreth = 12'hB82;
+
 // Standard mcause codes for the exceptions this core can raise.
 localparam [31:0] cause_misaligned_fetch = 32'd0;
 localparam [31:0] cause_illegal_instr    = 32'd2;
@@ -300,13 +308,22 @@ typedef enum logic [2:0] {
     ,bgeu = 7
 }   branch_ops;
 
+// Branch condition, evaluated from the operands rather than from the ALU
+// result on purpose.
+//
+// Taking it from the ALU put the branch decision *after* the ALU's output mux,
+// which put the next-PC adder after that again -- two 32-bit adders and a wide
+// case mux in series on the critical path. Its own subtractor runs in parallel
+// with the ALU instead. The result is the same; only the depth changes.
 function automatic bool take_branch(ext_operand in1, ext_operand in2,
-                                   ext_operand alu_result, funct3 f3); begin
-    logic is_zero = (alu_result[31:0] == 32'd0) ? 1'b1 : 1'b0;
+                                   funct3 f3); begin
+    logic [`word_size:0] diff = {1'b0, in1[`word_size-1:0]}
+                              - {1'b0, in2[`word_size-1:0]};
+    logic is_zero = (diff[`word_size-1:0] == `word_size'd0) ? 1'b1 : 1'b0;
 
-    // alu_result is {1'b0,in1} - {1'b0,in2}, so bit 32 is the borrow out of an
-    // unsigned subtract, i.e. exactly (in1 <u in2).
-    logic ult = alu_result[`word_size];
+    // bit 32 is the borrow out of an unsigned subtract, i.e. exactly
+    // (in1 <u in2).
+    logic ult = diff[`word_size];
 
     // Signed less-than is NOT the sign bit of that difference: when the signed
     // subtraction overflows, the truncated result has the wrong sign. Flipping
@@ -330,40 +347,67 @@ function automatic bool take_branch(ext_operand in1, ext_operand in2,
 end
 endfunction
 
-function automatic word_address compute_next_pc(
+// Next PC, together with whether fetch already went there.
+typedef struct packed {
+    word_address next_pc;
+    bool         mispredict;   // fetch is not presenting next_pc
+} next_pc_result_t;
+
+// Next PC.
+//
+// Two things are deliberately parallel here rather than serial:
+//
+//   * The three candidate targets are added up front, in parallel with each
+//     other and with the ALU. Previously this built one adder whose *operands*
+//     were chosen by the opcode and branch condition, chaining the adder
+//     behind everything that produced them.
+//   * Each candidate is compared against the address fetch is presenting, so
+//     the 32-bit comparison happens alongside the adders and only a 1-bit
+//     select is serial. Comparing after the target mux put a full-width
+//     compare directly in front of the control logic.
+//
+// Returning both from one function keeps the value and the mispredict flag
+// from drifting apart.
+function automatic next_pc_result_t compute_next_pc(
      ext_operand    rd1
     ,ext_operand    rd2
-    ,ext_operand    alu_result
     ,word           imm
     ,word_address   pc
+    ,word_address   fetched_pc
     ,opcode_q       op_q
     ,funct3         f3); begin
-    word in1 = pc;
-    word in2 = 4;
-    word target;
-    case (op_q)
-        q_jal:  in2 = imm;
-        q_jalr: begin
-            in1 = rd1[`word_size-1:0];
-            in2 = imm[`word_size-1:0];
-        end
-        q_branch:
-            if (take_branch(rd1, rd2, alu_result, f3))
-                in2 = imm[`word_size-1:0];
-        default: begin end
-    endcase
+    word pc_plus_4;
+    word pc_plus_imm;
+    word rs1_plus_imm;
+    bool miss_p4, miss_pimm, miss_rimm;
+    bool taken;
+    next_pc_result_t r;
 
-    target = in1 + in2;
-
+    pc_plus_4   = pc + `word_size'd4;
+    pc_plus_imm = pc + imm;
     // "The target address is obtained by adding the sign-extended 12-bit
     // I-immediate to the register rs1, then setting the least-significant bit
     // of the result to zero." Without this an odd target is fetched as-is: the
     // memory drops the low address bits but shuffle_store_data still rotates
     // the word by addr[1:0], so the pipeline executes garbage.
-    if (op_q == q_jalr)
-        target[0] = 1'b0;
+    rs1_plus_imm = (rd1[`word_size-1:0] + imm) & ~(`word_size'd1);
 
-    return target;
+    miss_p4   = (pc_plus_4    != fetched_pc);
+    miss_pimm = (pc_plus_imm  != fetched_pc);
+    miss_rimm = (rs1_plus_imm != fetched_pc);
+
+    taken = take_branch(rd1, rd2, f3);
+
+    case (op_q)
+        q_jal:    begin r.next_pc = pc_plus_imm;  r.mispredict = miss_pimm; end
+        q_jalr:   begin r.next_pc = rs1_plus_imm; r.mispredict = miss_rimm; end
+        q_branch: begin
+            r.next_pc    = taken ? pc_plus_imm : pc_plus_4;
+            r.mispredict = taken ? miss_pimm   : miss_p4;
+        end
+        default:  begin r.next_pc = pc_plus_4;    r.mispredict = miss_p4; end
+    endcase
+    return r;
 end
 endfunction
 

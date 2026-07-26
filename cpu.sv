@@ -498,7 +498,9 @@ import riscv::*;
 
 // Internal state
 ext_operand execute_result_comb;
+next_pc_result_t next_pc_result;
 word next_pc_comb;
+bool mispredict;
 word bypassed_rd1_comb;
 word bypassed_rd2_comb;
 
@@ -509,6 +511,9 @@ word bypassed_rd2_comb;
 // so no bypassing is needed.
 // ---------------------------------------------------------------------------
 word mstatus_r, mtvec_r, mepc_r, mcause_r, mtval_r;
+
+// Machine counters. 64 bits so a long benchmark cannot wrap mid-measurement.
+logic [63:0] mcycle_r, minstret_r;
 
 localparam int MSTATUS_MIE  = 3;
 localparam int MSTATUS_MPIE = 7;
@@ -523,6 +528,39 @@ bool  illegal_instr, misaligned_load, misaligned_store;
 word  mem_addr;
 trap_t trap;
 
+// Resolve one source operand against the three bypass sources. Kept as a
+// function so rs1 and rs2 cannot drift apart.
+function automatic word select_operand(input tag rs, input word rf_value);
+    bool hit_ex, hit_wb, hit_byp;
+    logic [1:0] sel;
+
+    hit_ex = executed_instruction_in.is_instruction_valid
+           & executed_instruction_in.writeback_instruction.is_writeback_valid
+           & (executed_instruction_in.writeback_instruction.wbs != 5'd0)
+           & (executed_instruction_in.instruction_opcode != q_load)
+           & (rs == executed_instruction_in.writeback_instruction.wbs);
+
+    hit_wb = writeback_instruction_in.is_instruction_valid
+           & writeback_instruction_in.is_writeback_valid
+           & (writeback_instruction_in.wbs != 5'd0)
+           & (rs == writeback_instruction_in.wbs);
+
+    hit_byp = register_file_bypass_in.bypass_is_valid
+            & (register_file_bypass_in.rs != 5'd0)
+            & (rs == register_file_bypass_in.rs);
+
+    sel = hit_ex  ? 2'd3 :
+          hit_wb  ? 2'd2 :
+          hit_byp ? 2'd1 : 2'd0;
+
+    case (sel)
+        2'd3:    select_operand = executed_instruction_in.writeback_instruction.wbd;
+        2'd2:    select_operand = writeback_instruction_in.wbd;
+        2'd1:    select_operand = register_file_bypass_in.rd;
+        default: select_operand = (rs == 5'd0) ? `word_size'd0 : rf_value;
+    endcase
+endfunction
+
 // Combinational: operands, ALU, next-PC, and mispredict detection
 always_comb begin
     word rd1;
@@ -530,61 +568,24 @@ always_comb begin
 
     // ---------------------------------------------------------------
     // Bypass Logic
-    // Priority (lowest to highest):
-    //   1. Register file value read at decode (already in rd1/rd2)
-    //   2. register_file_bypass: result written to reg file the same cycle
-    //      decode read it (WB concurrent with ID)
-    //   3. writeback_instruction_in: MEM/WB result (2 instructions ago),
-    //      valid for ALL instruction types including loads
-    //   4. executed_instruction_in: EX/MEM result (1 instruction ago),
-    //      valid only for NON-LOAD instructions (load data not yet ready)
+    // Priority (highest first):
+    //   1. executed_instruction_in: EX/MEM result (1 instruction ago), valid
+    //      only for NON-LOAD instructions -- for a load, wbd is still the
+    //      computed address. The load-use stall in control keeps a dependent
+    //      instruction from reaching execute before the data exists.
+    //   2. writeback_instruction_in: MEM/WB result (2 ago), valid for all
+    //      instruction types including loads
+    //   3. register_file_bypass: result written to the register file in the
+    //      same cycle decode read it (WB concurrent with ID)
+    //   4. the register file value captured at decode
+    //
+    // Written as one 4:1 mux rather than four chained overrides. The four
+    // conditions are independent and only a few gates each, so resolving them
+    // first leaves the 32-bit datapath two LUT levels deep instead of four --
+    // and this sits directly in front of the ALU on the critical path.
     // ---------------------------------------------------------------
-
-    // Start from register-file values captured at decode time
-    rd1 = ((decoded_instruction_in.rs1 == 5'd0) ? `word_size'd0 : decoded_instruction_in.rd1);
-    rd2 = ((decoded_instruction_in.rs2 == 5'd0) ? `word_size'd0 : decoded_instruction_in.rd2);
-
-    // --- Level 2: register_file_bypass (WB stage wrote at same cycle as decode read) ---
-    if (register_file_bypass_in.bypass_is_valid
-        && register_file_bypass_in.rs != 5'd0
-        && decoded_instruction_in.rs1 == register_file_bypass_in.rs)
-        rd1 = register_file_bypass_in.rd;
-
-    if (register_file_bypass_in.bypass_is_valid
-        && register_file_bypass_in.rs != 5'd0
-        && decoded_instruction_in.rs2 == register_file_bypass_in.rs)
-        rd2 = register_file_bypass_in.rd;
-
-    // --- Level 3: MEM/WB bypass (writeback_instruction_in, 2 cycles ago, incl. loads) ---
-    if (writeback_instruction_in.is_instruction_valid
-        && writeback_instruction_in.is_writeback_valid
-        && writeback_instruction_in.wbs != 5'd0
-        && decoded_instruction_in.rs1 == writeback_instruction_in.wbs)
-        rd1 = writeback_instruction_in.wbd;
-
-    if (writeback_instruction_in.is_instruction_valid
-        && writeback_instruction_in.is_writeback_valid
-        && writeback_instruction_in.wbs != 5'd0
-        && decoded_instruction_in.rs2 == writeback_instruction_in.wbs)
-        rd2 = writeback_instruction_in.wbd;
-
-    // --- Level 4: EX/MEM bypass (executed_instruction_in, 1 cycle ago, NON-LOAD only) ---
-    // For loads, the wbd at this point is the computed address, not the loaded data.
-    // The load-use hazard stall in the control module prevents this case from
-    // reaching execute incorrectly (the dependent instr is held for one cycle).
-    if (executed_instruction_in.is_instruction_valid
-        && executed_instruction_in.writeback_instruction.is_writeback_valid
-        && executed_instruction_in.writeback_instruction.wbs != 5'd0
-        && executed_instruction_in.instruction_opcode != q_load
-        && decoded_instruction_in.rs1 == executed_instruction_in.writeback_instruction.wbs)
-        rd1 = executed_instruction_in.writeback_instruction.wbd;
-
-    if (executed_instruction_in.is_instruction_valid
-        && executed_instruction_in.writeback_instruction.is_writeback_valid
-        && executed_instruction_in.writeback_instruction.wbs != 5'd0
-        && executed_instruction_in.instruction_opcode != q_load
-        && decoded_instruction_in.rs2 == executed_instruction_in.writeback_instruction.wbs)
-        rd2 = executed_instruction_in.writeback_instruction.wbd;
+    rd1 = select_operand(decoded_instruction_in.rs1, decoded_instruction_in.rd1);
+    rd2 = select_operand(decoded_instruction_in.rs2, decoded_instruction_in.rd2);
 
     bypassed_rd1_comb = rd1;
     bypassed_rd2_comb = rd2;
@@ -608,6 +609,10 @@ always_comb begin
         csr_mepc:    csr_read = mepc_r;
         csr_mcause:  csr_read = mcause_r;
         csr_mtval:   csr_read = mtval_r;
+        csr_mcycle:    csr_read = mcycle_r[31:0];
+        csr_mcycleh:   csr_read = mcycle_r[63:32];
+        csr_minstret:  csr_read = minstret_r[31:0];
+        csr_minstreth: csr_read = minstret_r[63:32];
         default:     csr_read = `word_size'd0;   // unimplemented reads as zero
     endcase
 
@@ -686,21 +691,33 @@ always_comb begin
 
 
     // Next PC: for non-control-flow instructions this is PC+4; for branches/jumps it is the target.
-    next_pc_comb = compute_next_pc(
+    next_pc_result = compute_next_pc(
         cast_to_ext_operand(rd1),
         cast_to_ext_operand(rd2),
-        execute_result_comb,
         decoded_instruction_in.imm,
         decoded_instruction_in.pc,
+        fetched_instruction_in.pc,
         decoded_instruction_in.instruction_opcode,
         decoded_instruction_in.f3);
 
+    next_pc_comb  = next_pc_result.next_pc;
+    mispredict    = next_pc_result.mispredict;
+
     // A trap or an MRET overrides the normal next PC. mtvec is used in direct
     // mode: the low two bits select the mode and are not part of the address.
-    if (trap.taken)
+    //
+    // Both targets come from CSRs, i.e. registers, so their comparisons against
+    // the address fetch is presenting are parallel too -- only the select is
+    // serial. The mispredict flag must be overridden alongside next_pc_comb:
+    // leaving it at the non-trap value means the redirect to mtvec never fires
+    // and the trap silently does not happen.
+    if (trap.taken) begin
         next_pc_comb = {mtvec_r[`word_size-1:2], 2'b00};
-    else if (decoded_instruction_in.is_instruction_valid && is_mret)
+        mispredict   = ({mtvec_r[`word_size-1:2], 2'b00} != fetched_instruction_in.pc);
+    end else if (decoded_instruction_in.is_instruction_valid && is_mret) begin
         next_pc_comb = mepc_r;
+        mispredict   = (mepc_r != fetched_instruction_in.pc);
+    end
 
     // Train the branch predictor on resolved control transfers only. Traps
     // also change the next PC, but predicting them would be meaningless.
@@ -710,7 +727,7 @@ always_comb begin
 
     // Mispredict: the next PC we computed (next_pc_comb) is not what fetch is currently fetching (fetched_instruction_in.pc).
     // Control can use this to redirect fetch to correct_pc.
-    if (decoded_instruction_in.is_instruction_valid && next_pc_comb != fetched_instruction_in.pc) begin
+    if (decoded_instruction_in.is_instruction_valid && mispredict) begin
         pc_control_out.branch_redirect_needed = true;
         pc_control_out.branch_target_pc = next_pc_comb;
     end
@@ -771,11 +788,21 @@ always_ff @(posedge clk) begin
     if (reset) begin
         executed_instruction_out.is_instruction_valid <= false;
         mstatus_r <= `word_size'd0;
+        mcycle_r   <= 64'd0;
+        minstret_r <= 64'd0;
         mtvec_r   <= `word_size'd0;
         mepc_r    <= `word_size'd0;
         mcause_r  <= `word_size'd0;
         mtval_r   <= `word_size'd0;
     end else begin
+        // Free-running machine counters. Writes to them are dropped: they are
+        // read-only here, which is permitted and keeps them off the CSR write
+        // path.
+        mcycle_r <= mcycle_r + 64'd1;
+        if (decoded_instruction_in.is_instruction_valid
+            && execute_control_signal_in.advance && !trap.taken)
+            minstret_r <= minstret_r + 64'd1;
+
         // CSR side effects commit only when the instruction itself does.
         if (decoded_instruction_in.is_instruction_valid && execute_control_signal_in.advance) begin
             if (trap.taken) begin
@@ -1079,7 +1106,7 @@ endmodule
 // ---------------------------------------------------------------------------
 module core #(
     parameter btb_enable  = 1,
-    parameter btb_entries = 16
+    parameter btb_entries = 8
 ) (
     input logic       clk,
     input logic       reset,

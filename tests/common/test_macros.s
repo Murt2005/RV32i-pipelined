@@ -6,7 +6,15 @@
 # CYCLES:      read 0x0002FFF0   (free-running while the core runs)
 # RETIRED:     read 0x0002FFF4   (instructions committed)
 #
-# The stack starts below all of these, at STACK_TOP - 32.
+# Data memory map, top end:
+#   0x0002FFF0..FFFF  MMIO above
+#   0x0002FFC0..FFCF  tohost/fromhost, for the riscv-tests `p` environment;
+#                     a store there halts the machine
+#   0x0002FFB0        STACK_TOP, growing DOWN
+#
+# The stack must start *below* tohost. It used to start above it, which meant
+# the first function with a stack frame bigger than 32 bytes stored into the
+# halt address and stopped the machine.
 #
 # Conventions:
 # - Macros clobber: a0, t0, t1, s10, s11 (ASSERT/print helpers use s10/s11).
@@ -17,7 +25,7 @@
 .set HALT_ADDR, 0x0002FFFC
 .set CYCLE_ADDR, 0x0002FFF0
 .set RETIRED_ADDR, 0x0002FFF4
-.set STACK_TOP, 0x00030000
+.set STACK_TOP, 0x0002FFB0
 
 .macro TEST_FILE_HEADER header_label
     la      a0, \header_label
