@@ -65,6 +65,8 @@ module rv32_top #(
     localparam [31:0] MMIO_PUTCHAR = 32'h0002_FFF8;
     localparam [31:0] MMIO_HALT    = 32'h0002_FFFC;
     localparam [31:0] MMIO_CYCLES  = 32'h0002_FFF0;
+    // riscv-tests `p` environment reports results here and then spins.
+    localparam [31:0] MMIO_TOHOST  = 32'h0002_FFC0;
     localparam [31:0] MMIO_RETIRED = 32'h0002_FFF4;
 
     // -----------------------------------------------------------------------
@@ -260,7 +262,8 @@ module rv32_top #(
                         & is_any_byte(cpu_data_req.do_write);
 
     assign mmio_halt    = cpu_run & cpu_data_req.valid
-                        & (cpu_data_req.addr == MMIO_HALT)
+                        & ((cpu_data_req.addr == MMIO_HALT)
+                        |  (cpu_data_req.addr == MMIO_TOHOST))
                         & is_any_byte(cpu_data_req.do_write);
 
     // -----------------------------------------------------------------------

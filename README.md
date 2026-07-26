@@ -75,7 +75,11 @@ Tests are RV32I assembly programs under `tests/isa/` (ISA correctness) and `test
 
 - **`tests/isa/`** — add/sub, shifts, logic, compare, loads/stores (basic and sign-ext), LUI/AUIPC, branches (basic/signed/unsigned), jumps (JAL/JALR).
 - **`tests/hazards/`** — load-use stalls, load chains, branch-after-load/ALU, EX–EX and MEM–EX data hazards, bypass stress.
-- **`tests/riscv-tests/`** — the official [riscv-tests](https://github.com/riscv-software-src/riscv-tests) suite (submodule). The 40 `rv32ui` tests are built against a local environment in `tests/riscv-tests-env/`, because the suite's own `p` environment reports results via machine-mode CSRs and `ECALL` that this core does not implement. `fence_i` and `ma_data` are excluded: the first needs self-modifying code, which a Harvard machine with a separate instruction memory cannot do, and the second needs misaligned-access support the core neither implements nor traps.
+- **`tests/riscv-tests/`** — the official [riscv-tests](https://github.com/riscv-software-src/riscv-tests) suite (submodule). The 40 `rv32ui` tests run two ways, and both pass:
+  - against a local environment (`tests/riscv-tests-env/riscv_test.h`) that reports through this project's MMIO registers, and
+  - against the suite's **stock `p` environment**, which reports through an `ECALL` trap handler and the `tohost` location — so it exercises `mtvec`/`mepc`/`mcause`/`ECALL`/`MRET` on every test. `tests/riscv-tests-env/link-p.ld` places `.tohost` at `0x0002FFC0`, which the tops treat as a halt.
+
+  `fence_i` and `ma_data` are excluded. The first needs self-modifying code, which a Harvard machine with a separate instruction memory cannot do. The second requires *emulating* misaligned accesses in a trap handler; this core takes the other behaviour the spec allows and traps on them.
 
 Run one test: `make run-test-<name>-iverilog` (e.g. `run-test-isa-add_sub-iverilog`). Run all: `make run-tests-iverilog`.
 
@@ -92,7 +96,8 @@ Against real hardware (see `fpga/README.md`), `host/rv32_diff.py` additionally r
 | `make run-test-<name>-iverilog` | Build ELF for `tests/<name>.s` (e.g. `isa/add_sub` → `run-test-isa-add_sub-iverilog`), run that test under Icarus. |
 | `make run-tests-iverilog` | Run all tests under `tests/isa/` and `tests/hazards/`. |
 | `make riscv-tests` | Build the official riscv-tests `rv32ui` suite into `build/riscv-tests/`. |
-| `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus. |
+| `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus (local environment). |
+| `make run-riscv-tests-p-iverilog` | Run the same tests under the suite's **stock `p` environment**. |
 | `make coverage` | Verilator line/toggle coverage over both suites; annotated output in `build/cov/annotated/`. |
 | `make clean` | Remove build artifacts, `*.hex`, `test`, sim binaries, `test.vcd`, `obj_dir/`. |
 

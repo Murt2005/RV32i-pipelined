@@ -120,7 +120,7 @@ RVTEST_FLAGS := -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles -fno-builtin \
                 -Itests/riscv-tests-env -Itests/riscv-tests/isa/macros/scalar \
                 -T tests/riscv-tests-env/link.ld
 
-.PHONY: riscv-tests run-riscv-tests-iverilog
+.PHONY: riscv-tests run-riscv-tests-iverilog riscv-tests-p run-riscv-tests-p-iverilog
 
 build/riscv-tests/%.elf: $(RVTESTS_DIR)/%.S tests/riscv-tests-env/riscv_test.h
 	mkdir -p $(dir $@)
@@ -137,6 +137,37 @@ run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 			pass=$$((pass+1)); echo "PASS rv32ui-$$t"; \
 		else \
 			fail=$$((fail+1)); echo "FAIL rv32ui-$$t  ($$out)"; \
+		fi; \
+	done; \
+	echo ""; echo "$$pass passed, $$fail failed, `echo $(RVTESTS) | wc -w | tr -d ' '` total"; \
+	[ $$fail -eq 0 ]
+
+# The same test bodies against the suite's *stock* `p` environment, which
+# reports results through an ECALL trap handler and the `tohost` location
+# rather than through this project's MMIO registers. It therefore exercises
+# mtvec/mepc/mcause/ECALL/MRET on every single test.
+RVTEST_P_FLAGS := -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles -fno-builtin \
+                  -Itests/riscv-tests/env/p -Itests/riscv-tests/env \
+                  -Itests/riscv-tests/isa/macros/scalar \
+                  -T tests/riscv-tests-env/link-p.ld
+
+RVTESTS_P_ELF := $(addprefix build/riscv-tests-p/,$(addsuffix .elf,$(RVTESTS)))
+
+build/riscv-tests-p/%.elf: $(RVTESTS_DIR)/%.S tests/riscv-tests-env/link-p.ld
+	mkdir -p $(dir $@)
+	$(CC) $(RVTEST_P_FLAGS) -o $@ $<
+
+riscv-tests-p: $(RVTESTS_P_ELF)
+
+run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
+	@pass=0; fail=0; \
+	for t in $(RVTESTS); do \
+		/bin/bash ./elftohex.sh build/riscv-tests-p/$$t.elf . >/dev/null 2>&1; \
+		out=`./$(SIM_IVERILOG) +stallrate=$(STALL_RATE) 2>/dev/null | grep -oE 'TOHOST=[0-9]+' | head -1`; \
+		if [ "$$out" = "TOHOST=1" ]; then \
+			pass=$$((pass+1)); echo "PASS rv32ui-p-$$t"; \
+		else \
+			fail=$$((fail+1)); echo "FAIL rv32ui-p-$$t  ($$out)"; \
 		fi; \
 	done; \
 	echo ""; echo "$$pass passed, $$fail failed, `echo $(RVTESTS) | wc -w | tr -d ' '` total"; \

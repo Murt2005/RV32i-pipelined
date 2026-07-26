@@ -134,11 +134,25 @@ always @(posedge clk)
 		$write("%c", data_mem_req.data[7:0]);
 	end
 
+// Halt on the usual register, or on `tohost`. The stock riscv-tests `p`
+// environment reports its result by storing to tohost and then spinning
+// forever, so without this the watchdog would be the only thing that stopped
+// it and the result would be lost.
+wire halt_write = data_mem_req.valid
+                && data_mem_req.do_write != {(`word_address_size/8){1'b0}}
+                && (data_mem_req.addr == `word_address_size'h0002_FFFC
+                 || data_mem_req.addr == `word_address_size'h0002_FFC0);
+
 always @(posedge clk)
-	if (data_mem_req.valid && data_mem_req.addr == `word_address_size'h0002_FFFC &&
-        data_mem_req.do_write != {(`word_address_size/8){1'b0}})
+	if (halt_write)
 		halt <= true;
 	else
 		halt <= false;
+
+// tohost: 1 means pass, anything else is (failing test number << 1) | 1.
+always @(posedge clk)
+	if (data_mem_req.valid && data_mem_req.addr == `word_address_size'h0002_FFC0
+	    && data_mem_req.do_write != {(`word_address_size/8){1'b0}})
+		$write("\nTOHOST=%0d\n", data_mem_req.data);
 
 endmodule
