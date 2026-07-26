@@ -9,11 +9,6 @@ typedef struct packed {
     riscv::word pc;
 } branch_pc_redirect_request_t;
 
-// Placeholder for fetch response upon redirect (unused) 
-typedef struct packed {
-    bool _unused_;
-} branch_pc_redirect_response_t;
-
 // Stage Control Signals
 //  - advance: allow instruction to move to next stage
 //  - flush: invalidate the stages output
@@ -78,9 +73,6 @@ typedef struct packed {
 typedef struct packed {
     bool branch_redirect_needed;
     riscv::word branch_target_pc; // where fetch should go over branch
-
-    bool stale_instruction_in_execute;
-    riscv::word expected_execute_pc; 
 } pc_control_t;
 
 // Memory stage output, passes write-back info and load result (later) to writeback
@@ -108,7 +100,6 @@ module fetch(
     input stage_control_signal_t                fetch_control_signal_in,
 
     input branch_pc_redirect_request_t          branch_pc_redirect_request_in,
-    output branch_pc_redirect_response_t        branch_pc_redirect_response_out,
 
     output memory_io_req                        instruction_memory_request,
     input memory_io_rsp                         instruction_memory_response,
@@ -755,12 +746,7 @@ always_comb begin
         // Branch / Jump mispredict: redirect fetch and flush decode.
         // Only check when there is no load-use stall active.
         // ------------------------------------------------------------------
-        // PC redirect: prefer wrong-PC (stale) correction over branch mispredict for ordering
-        if (pc_control_in.stale_instruction_in_execute) begin
-            branch_pc_redirect_request_out.is_pc_valid = true;
-            branch_pc_redirect_request_out.pc = pc_control_in.expected_execute_pc;
-            decode_control_signal_out.flush = true;
-        end else if (pc_control_in.branch_redirect_needed) begin
+        if (pc_control_in.branch_redirect_needed) begin
             branch_pc_redirect_request_out.is_pc_valid = true;
             branch_pc_redirect_request_out.pc = pc_control_in.branch_target_pc;
             decode_control_signal_out.flush = true;
@@ -824,7 +810,6 @@ import riscv::*;
 stage_control_signal_t fetch_control_signal, decode_control_signal, execute_control_signal, memory_control_signal, writeback_control_signal;
 /* verilator lint_on UNOPTFLAT */
 branch_pc_redirect_request_t branch_pc_redirect_request;
-branch_pc_redirect_response_t branch_pc_redirect_response;
 
 fetched_instruction_t fetched_instruction;
 
@@ -834,7 +819,6 @@ fetch fetch_m(
     .reset_pc(reset_pc),
     .fetch_control_signal_in(fetch_control_signal),
     .branch_pc_redirect_request_in(branch_pc_redirect_request),
-    .branch_pc_redirect_response_out(branch_pc_redirect_response),
     .instruction_memory_request(inst_mem_req),
     .instruction_memory_response(inst_mem_rsp),
     .fetched_instruction_out(fetched_instruction)
