@@ -445,6 +445,29 @@ def do_riscv_tests(board, repo_root, timeout):
     return 0 if nfail == 0 else 1
 
 
+BENCH_RESULT_ADDR = 0x00021800
+
+
+def do_bench(board, elf, timeout):
+    """Run a workload that samples the performance counters and report IPC."""
+    _, halted = run_elf(board, elf, timeout=timeout, quiet=True)
+    if not halted:
+        print("benchmark did not halt", file=sys.stderr)
+        return 1
+    raw = board.read_mem(BENCH_RESULT_ADDR, 8)
+    cycles = int.from_bytes(raw[0:4], "little")
+    retired = int.from_bytes(raw[4:8], "little")
+    if cycles == 0:
+        print("counters read back zero -- is the bitstream current?", file=sys.stderr)
+        return 1
+    print(f"cycles   : {cycles}")
+    print(f"retired  : {retired}")
+    print(f"IPC      : {retired / cycles:.3f}")
+    print(f"at 6 MHz : {cycles / 6e6 * 1e3:.2f} ms, "
+          f"{retired / (cycles / 6e6) / 1e6:.2f} MIPS")
+    return 0
+
+
 def do_regress(board, repo_root, timeout):
     stems = []
     for sub in ("isa", "hazards"):
@@ -497,13 +520,16 @@ def main():
                     help="run every test in tests/ and diff against simulation")
     ap.add_argument("--riscv-tests", action="store_true",
                     help="run the official rv32ui suite from build/riscv-tests")
+    ap.add_argument("--bench", metavar="ELF",
+                    help="run a counter-sampling workload and report IPC")
     ap.add_argument("--timeout", type=float, default=15.0,
                     help="seconds to wait for the halt sentinel")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
-    if not (args.elf or args.probe or args.regress or args.riscv_tests):
-        ap.error("give one of --elf, --probe, --regress or --riscv-tests")
+    if not (args.elf or args.probe or args.regress or args.riscv_tests
+            or args.bench):
+        ap.error("give one of --elf, --probe, --regress, --riscv-tests or --bench")
 
     try:
         board = open_board(args.port, verbose=args.verbose)
@@ -518,6 +544,8 @@ def main():
         if args.elf:
             _, halted = run_elf(board, args.elf, timeout=args.timeout)
             return 0 if halted else 1
+        if args.bench:
+            return do_bench(board, args.bench, args.timeout)
         if args.riscv_tests:
             return do_riscv_tests(board, repo_root, args.timeout)
         if args.regress:

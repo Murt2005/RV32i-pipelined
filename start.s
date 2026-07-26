@@ -14,7 +14,7 @@
 .text
 
 _start:
-    li      sp, (0x00030000 - 16)
+    li      sp, (0x00030000 - 32)
 
     la      a0, msg_header
     call    print_str

@@ -5,6 +5,21 @@
 module top(input clk, input reset, output logic halt);
 
 
+logic retired;
+
+// ---------------------------------------------------------------------------
+// Performance counters, readable as memory-mapped words.
+//   0x0002FFF0  cycles elapsed
+//   0x0002FFF4  instructions committed
+// The response is muxed over whatever the data memory returns, one cycle after
+// the request, matching the memory's own latency.
+// ---------------------------------------------------------------------------
+logic [31:0] perf_cycles;
+logic [31:0] perf_retired;
+logic        perf_sel_cycles, perf_sel_retired;
+logic        perf_sel_cycles_q, perf_sel_retired_q;
+logic [31:0] perf_cycles_q, perf_retired_q;
+
 memory_io_req 	inst_mem_req;
 memory_io_rsp 	inst_mem_rsp;
 memory_io_req   data_mem_req;
@@ -15,6 +30,7 @@ core the_core(
 	,.reset(reset)
 	,.stall(1'b0)               // simulation memories always accept a write
 	,.clear_regs(1'b0)          // the register file's `initial` block covers this
+	,.retired(retired)
     ,.reset_pc(32'h0001_0000)
 	,.inst_mem_req(inst_mem_req)
 	,.inst_mem_rsp(inst_mem_rsp)
@@ -39,6 +55,33 @@ core the_core(
     ,.rsp(inst_mem_rsp)
     );
 
+memory_io_rsp   data_mem_rsp_raw;
+
+assign perf_sel_cycles  = data_mem_req.valid && data_mem_req.addr == `word_address_size'h0002_FFF0
+                          && is_any_byte(data_mem_req.do_read);
+assign perf_sel_retired = data_mem_req.valid && data_mem_req.addr == `word_address_size'h0002_FFF4
+                          && is_any_byte(data_mem_req.do_read);
+
+always @(posedge clk) begin
+    if (reset) begin
+        perf_cycles  <= 32'd0;
+        perf_retired <= 32'd0;
+    end else begin
+        perf_cycles  <= perf_cycles + 32'd1;
+        if (retired) perf_retired <= perf_retired + 32'd1;
+    end
+    perf_sel_cycles_q  <= perf_sel_cycles;
+    perf_sel_retired_q <= perf_sel_retired;
+    perf_cycles_q      <= perf_cycles;
+    perf_retired_q     <= perf_retired;
+end
+
+always @(*) begin
+    data_mem_rsp = data_mem_rsp_raw;
+    if (perf_sel_cycles_q)       data_mem_rsp.data = perf_cycles_q;
+    else if (perf_sel_retired_q) data_mem_rsp.data = perf_retired_q;
+end
+
 `memory #(
     .size(32'h0001_0000)
     ,.initialize_mem(true)
@@ -51,7 +94,7 @@ core the_core(
     .clk(clk)
     ,.reset(reset)
     ,.req(data_mem_req)
-    ,.rsp(data_mem_rsp)
+    ,.rsp(data_mem_rsp_raw)
     );
 
 

@@ -39,6 +39,7 @@ python3 host/rv32_host.py --regress       # all tests, diffed against simulation
 python3 host/rv32_host.py --riscv-tests   # official rv32ui suite (make riscv-tests first)
 python3 host/rv32_diff.py --iters 200     # random programs vs the reference model
 python3 host/rv32_diff.py --stall-rate 200   # ... with the pipeline stalled most cycles
+python3 host/rv32_host.py --bench build/tests/bench/ipc.elf   # measure IPC
 ```
 
 After the first firmware flash you never need BOOTSEL again: opening the CDC
@@ -94,6 +95,30 @@ garbles bytes rather than producing silence.
 
 **Utilisation** (`nextpnr --up5k --package sg48`): 3321/5280 LC (62%),
 5/30 BRAM, 4/4 SPRAM, 8.46 MHz vs a 6 MHz constraint.
+
+## Performance
+
+Two counters are readable as memory-mapped words while the core runs, zeroed
+each time it is released:
+
+| Address | Meaning |
+|---|---|
+| `0x0002FFF0` | cycles elapsed |
+| `0x0002FFF4` | instructions committed |
+
+`tests/bench/ipc.s` runs a deliberately mixed workload — ALU, a load-use pair, a
+taken branch and a store — and stores both counters where the host can read them:
+
+```
+cycles   : 32017
+retired  : 20012
+IPC      : 0.625
+at 6 MHz : 5.34 ms, 3.75 MIPS
+```
+
+The gap is mostly taken branches: every one costs a redirect and a decode flush,
+because `core`'s `btb_enable` parameter is still a stub and nothing predicts.
+That is the number to beat before and after any branch-prediction work.
 
 ## Wire protocol
 

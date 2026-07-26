@@ -570,8 +570,15 @@ module memory(
     output memory_io_req   data_memory_request,
     input  memory_io_rsp   data_memory_response,
     input executed_instruction_t  executed_instruction_in,
-    output memory_instruction_t memory_instruction_out
+    output memory_instruction_t memory_instruction_out,
+    output logic           retired
 );
+
+// One pulse per instruction leaving EX/MEM. Flushed instructions never get
+// here -- they are turned into bubbles at decode -- so this counts committed
+// instructions, which is what an IPC figure needs.
+assign retired = memory_control_signal_in.advance
+               & executed_instruction_in.is_instruction_valid;
 
 import riscv::*;
 
@@ -803,6 +810,7 @@ module core #(
     input logic       reset,
     input logic       stall,          // freeze the whole pipeline (peripheral backpressure)
     input logic       clear_regs,     // zero the register file (hold >=32 cycles)
+    output logic      retired,        // one pulse per committed instruction
     input logic       [`word_address_size-1:0] reset_pc,
     output memory_io_req   inst_mem_req,
     input  memory_io_rsp   inst_mem_rsp,
@@ -879,7 +887,8 @@ memory memory_m(
     .data_memory_request(data_mem_req),
     .data_memory_response(data_mem_rsp),
     .executed_instruction_in(executed_instruction),
-    .memory_instruction_out(memory_instruction)
+    .memory_instruction_out(memory_instruction),
+    .retired(retired)
 );
 
 writeback writeback_m(

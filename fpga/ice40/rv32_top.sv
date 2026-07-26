@@ -64,6 +64,8 @@ module rv32_top #(
     localparam [7:0] EOT          = 8'h04;
     localparam [31:0] MMIO_PUTCHAR = 32'h0002_FFF8;
     localparam [31:0] MMIO_HALT    = 32'h0002_FFFC;
+    localparam [31:0] MMIO_CYCLES  = 32'h0002_FFF0;
+    localparam [31:0] MMIO_RETIRED = 32'h0002_FFF4;
 
     // -----------------------------------------------------------------------
     // Power-on reset. Do this first; it is not optional on this board.
@@ -177,7 +179,15 @@ module rv32_top #(
     assign cpu_reset = rst | ~cpu_run;
 
     memory_io_req cpu_inst_req, cpu_data_req;
-    memory_io_rsp inst_rsp,     data_rsp;
+    memory_io_rsp inst_rsp,     data_rsp, data_rsp_raw;
+    logic         retired;
+
+    // Performance counters, readable as memory-mapped words. Counted only while
+    // the core is running, so a figure is not diluted by time spent stopped.
+    logic [31:0] perf_cycles, perf_retired;
+    logic [31:0] perf_cycles_q, perf_retired_q;
+    logic        perf_sel_cycles, perf_sel_retired;
+    logic        perf_sel_cycles_q, perf_sel_retired_q;
 
     core the_core (
         .clk(clk),
@@ -191,8 +201,35 @@ module rv32_top #(
         .inst_mem_req(cpu_inst_req),
         .inst_mem_rsp(inst_rsp),
         .data_mem_req(cpu_data_req),
-        .data_mem_rsp(data_rsp)
+        .data_mem_rsp(data_rsp),
+        .retired(retired)
     );
+
+    assign perf_sel_cycles  = cpu_data_req.valid & (cpu_data_req.addr == MMIO_CYCLES)
+                            & is_any_byte(cpu_data_req.do_read);
+    assign perf_sel_retired = cpu_data_req.valid & (cpu_data_req.addr == MMIO_RETIRED)
+                            & is_any_byte(cpu_data_req.do_read);
+
+    always_ff @(posedge clk) begin
+        if (rst || !cpu_run) begin
+            perf_cycles  <= 32'd0;
+            perf_retired <= 32'd0;
+        end else begin
+            perf_cycles <= perf_cycles + 32'd1;
+            if (retired) perf_retired <= perf_retired + 32'd1;
+        end
+        perf_sel_cycles_q  <= perf_sel_cycles;
+        perf_sel_retired_q <= perf_sel_retired;
+        perf_cycles_q      <= perf_cycles;
+        perf_retired_q     <= perf_retired;
+    end
+
+    // Muxed over the memory's own response, one cycle later to match its latency.
+    always_comb begin
+        data_rsp = data_rsp_raw;
+        if (perf_sel_cycles_q)       data_rsp.data = perf_cycles_q;
+        else if (perf_sel_retired_q) data_rsp.data = perf_retired_q;
+    end
 
     // Free-running Galois LFSR, reseeded on every 'G' so that a given program
     // at a given rate replays identically -- shrinking a failing case depends
@@ -575,7 +612,7 @@ module rv32_top #(
     );
 
     memory_spram #(.enable_rsp_addr(1)) data_mem (
-        .clk(clk), .reset(rst), .req(data_req_mux), .rsp(data_rsp)
+        .clk(clk), .reset(rst), .req(data_req_mux), .rsp(data_rsp_raw)
     );
 
     // -----------------------------------------------------------------------
