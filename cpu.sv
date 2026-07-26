@@ -75,6 +75,17 @@ typedef struct packed {
     riscv::word branch_target_pc; // where fetch should go over branch
 } pc_control_t;
 
+// Trap taken in the execute stage. Execute is the commit point: instructions
+// behind a redirect are already flushed at decode before they get here, so an
+// exception raised here is precise -- the faulting instruction is turned into a
+// bubble and never reaches writeback.
+typedef struct packed {
+    bool        taken;
+    riscv::word cause;
+    riscv::word epc;
+    riscv::word tval;
+} trap_t;
+
 // Memory stage output, passes write-back info and load result (later) to writeback
 typedef struct packed {
     bool is_instruction_valid;
@@ -415,6 +426,27 @@ word next_pc_comb;
 word bypassed_rd1_comb;
 word bypassed_rd2_comb;
 
+// ---------------------------------------------------------------------------
+// Machine-mode CSR file. Lives in execute because that is where CSR
+// instructions commit: only one instruction is ever in this stage, and a write
+// registered at the end of a cycle is visible to the next instruction's read,
+// so no bypassing is needed.
+// ---------------------------------------------------------------------------
+word mstatus_r, mtvec_r, mepc_r, mcause_r, mtval_r;
+
+localparam int MSTATUS_MIE  = 3;
+localparam int MSTATUS_MPIE = 7;
+
+logic [11:0] csr_addr;
+word         csr_read;
+word         csr_write;
+bool         csr_wen;
+
+bool  is_system, is_csr, is_ecall, is_ebreak, is_mret;
+bool  illegal_instr, misaligned_load, misaligned_store;
+word  mem_addr;
+trap_t trap;
+
 // Combinational: operands, ALU, next-PC, and mispredict detection
 always_comb begin
     word rd1;
@@ -481,6 +513,49 @@ always_comb begin
     bypassed_rd1_comb = rd1;
     bypassed_rd2_comb = rd2;
 
+    // ---------------------------------------------------------------
+    // SYSTEM decode and CSR access
+    // ---------------------------------------------------------------
+    csr_addr  = decoded_instruction_in.instruction[31:20];
+    is_system = (decoded_instruction_in.instruction_opcode == q_system);
+    is_csr    = is_system && is_csr_op(decoded_instruction_in.f3);
+    is_ecall  = is_system && (decoded_instruction_in.f3 == 3'b000) && (csr_addr == 12'h000);
+    is_ebreak = is_system && (decoded_instruction_in.f3 == 3'b000) && (csr_addr == 12'h001);
+    is_mret   = is_system && (decoded_instruction_in.f3 == 3'b000) && (csr_addr == 12'h302);
+
+    // Note the case labels are the *address* localparams from the riscv
+    // package. The state registers below must not be named the same, or they
+    // shadow those constants and every access silently falls to the default.
+    case (csr_addr)
+        csr_mstatus: csr_read = mstatus_r;
+        csr_mtvec:   csr_read = mtvec_r;
+        csr_mepc:    csr_read = mepc_r;
+        csr_mcause:  csr_read = mcause_r;
+        csr_mtval:   csr_read = mtval_r;
+        default:     csr_read = `word_size'd0;   // unimplemented reads as zero
+    endcase
+
+    begin
+        word csr_operand;
+        // The immediate forms take a zero-extended 5-bit field from where rs1
+        // would be, not a register.
+        csr_operand = decoded_instruction_in.f3[2]
+                    ? {{(`word_size-5){1'b0}}, decoded_instruction_in.rs1}
+                    : rd1;
+
+        case (decoded_instruction_in.f3[1:0])
+            2'b01:   csr_write = csr_operand;                 // csrrw / csrrwi
+            2'b10:   csr_write = csr_read | csr_operand;      // csrrs / csrrsi
+            default: csr_write = csr_read & ~csr_operand;     // csrrc / csrrci
+        endcase
+
+        // Set/clear forms with a zero source must not write at all, so that
+        // reading a CSR cannot have a side effect.
+        csr_wen = is_csr &&
+                  ((decoded_instruction_in.f3[1:0] == 2'b01) ||
+                   (decoded_instruction_in.rs1 != 5'd0));
+    end
+
     // ALU / execution: computes result for R-type, I-type, U-type, etc. (add, sub, shift, compare, etc.).
     execute_result_comb = execute(
         cast_to_ext_operand(rd1),
@@ -491,6 +566,49 @@ always_comb begin
         decoded_instruction_in.f3,
         decoded_instruction_in.f7);
 
+    // ---------------------------------------------------------------
+    // Exceptions
+    //
+    // This must sit *after* the ALU above: the faulting address for a
+    // misaligned access is the ALU result, and reading it earlier in the same
+    // always_comb picks up the value from the previous evaluation -- i.e. the
+    // previous instruction's address -- which raises traps on perfectly aligned
+    // accesses.
+    // ---------------------------------------------------------------
+    illegal_instr = (decoded_instruction_in.instruction_opcode == q_unknown);
+
+    mem_addr = execute_result_comb[`word_size-1:0];
+    misaligned_load  = (decoded_instruction_in.instruction_opcode == q_load)
+                     && is_misaligned(mem_addr, cast_to_memory_op(decoded_instruction_in.f3));
+    misaligned_store = (decoded_instruction_in.instruction_opcode == q_store)
+                     && is_misaligned(mem_addr, cast_to_memory_op(decoded_instruction_in.f3));
+
+    trap       = {($bits(trap_t)){1'b0}};
+    trap.epc   = decoded_instruction_in.pc;
+    if (decoded_instruction_in.is_instruction_valid) begin
+        if (illegal_instr) begin
+            trap.taken = true;
+            trap.cause = cause_illegal_instr;
+            trap.tval  = decoded_instruction_in.instruction;
+        end else if (is_ecall) begin
+            trap.taken = true;
+            trap.cause = cause_ecall_m;
+        end else if (is_ebreak) begin
+            trap.taken = true;
+            trap.cause = cause_breakpoint;
+            trap.tval  = decoded_instruction_in.pc;
+        end else if (misaligned_load) begin
+            trap.taken = true;
+            trap.cause = cause_misaligned_load;
+            trap.tval  = mem_addr;
+        end else if (misaligned_store) begin
+            trap.taken = true;
+            trap.cause = cause_misaligned_store;
+            trap.tval  = mem_addr;
+        end
+    end
+
+
     // Next PC: for non-control-flow instructions this is PC+4; for branches/jumps it is the target.
     next_pc_comb = compute_next_pc(
         cast_to_ext_operand(rd1),
@@ -500,6 +618,13 @@ always_comb begin
         decoded_instruction_in.pc,
         decoded_instruction_in.instruction_opcode,
         decoded_instruction_in.f3);
+
+    // A trap or an MRET overrides the normal next PC. mtvec is used in direct
+    // mode: the low two bits select the mode and are not part of the address.
+    if (trap.taken)
+        next_pc_comb = {mtvec_r[`word_size-1:2], 2'b00};
+    else if (decoded_instruction_in.is_instruction_valid && is_mret)
+        next_pc_comb = mepc_r;
 
     // Default: no PC correction
     pc_control_out = {($bits(pc_control_t)){1'b0}};
@@ -514,12 +639,44 @@ always_comb begin
 
 end
 
-// Sequential: pass instruction to memory stage and update PC tracking
+// Sequential: pass instruction to memory stage, update CSRs and PC tracking
 always_ff @(posedge clk) begin
     if (reset) begin
         executed_instruction_out.is_instruction_valid <= false;
+        mstatus_r <= `word_size'd0;
+        mtvec_r   <= `word_size'd0;
+        mepc_r    <= `word_size'd0;
+        mcause_r  <= `word_size'd0;
+        mtval_r   <= `word_size'd0;
     end else begin
+        // CSR side effects commit only when the instruction itself does.
         if (decoded_instruction_in.is_instruction_valid && execute_control_signal_in.advance) begin
+            if (trap.taken) begin
+                mepc_r   <= trap.epc;
+                mcause_r <= trap.cause;
+                mtval_r  <= trap.tval;
+                mstatus_r[MSTATUS_MPIE] <= mstatus_r[MSTATUS_MIE];
+                mstatus_r[MSTATUS_MIE]  <= 1'b0;
+            end else if (is_mret) begin
+                mstatus_r[MSTATUS_MIE]  <= mstatus_r[MSTATUS_MPIE];
+                mstatus_r[MSTATUS_MPIE] <= 1'b1;
+            end else if (csr_wen) begin
+                case (csr_addr)
+                    csr_mstatus: mstatus_r <= csr_write;
+                    csr_mtvec:   mtvec_r   <= csr_write;
+                    csr_mepc:    mepc_r    <= csr_write;
+                    csr_mcause:  mcause_r  <= csr_write;
+                    csr_mtval:   mtval_r   <= csr_write;
+                    default:     ;                     // writes to unimplemented CSRs are dropped
+                endcase
+            end
+        end
+
+        // A faulting instruction must not commit: turn it into a bubble rather
+        // than passing it to memory, so it neither issues its access nor writes
+        // back. Everything behind it is flushed by the redirect.
+        if (decoded_instruction_in.is_instruction_valid && execute_control_signal_in.advance
+            && !trap.taken) begin
             executed_instruction_out.is_instruction_valid <= true;
 
             // Pass operands and write-back info to memory stage.
@@ -533,6 +690,10 @@ always_ff @(posedge clk) begin
             executed_instruction_out.writeback_instruction.is_instruction_valid <= decoded_instruction_in.is_instruction_valid;
             executed_instruction_out.f3 <= decoded_instruction_in.f3;
             executed_instruction_out.instruction_opcode <= decoded_instruction_in.instruction_opcode;
+
+            // CSR reads deliver their result through the normal write-back path.
+            if (is_csr)
+                executed_instruction_out.writeback_instruction.wbd <= csr_read;
         end else if (memory_control_signal_in.advance) begin
             // Execute didn't advance but memory did: clear execute output (bubble).
             executed_instruction_out <= {($bits(executed_instruction_t)){1'b0}};

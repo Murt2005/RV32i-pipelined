@@ -12,7 +12,8 @@ Memory map (from `ld.script`): `.text` at `0x00010000`, `.rodata`/`.data`/`.bss`
 
 ## Supported instructions
 
-The core implements **RV32I** only (no M, A, F, or other extensions). Supported instructions:
+The core implements **RV32I** plus the machine-mode CSRs and traps the base ISA
+needs. Supported instructions:
 
 | Instruction Type | Instructions |
 |-------------------|--------------|
@@ -25,6 +26,25 @@ The core implements **RV32I** only (no M, A, F, or other extensions). Supported 
 | **JAL** | `jal` |
 | **JALR** | `jalr` |
 | **LUI** | `lui` |
+| **MISC-MEM** | `fence` (architecturally a NOP: in-order pipeline, separate instruction and data memories) |
+| **SYSTEM** | `csrrw`, `csrrs`, `csrrc`, `csrrwi`, `csrrsi`, `csrrci`, `ecall`, `ebreak`, `mret` |
+
+### Exceptions
+
+Traps are taken in the execute stage, which is the commit point — instructions
+behind a redirect are already flushed at decode before they get there, so the
+faulting instruction is turned into a bubble and never reaches writeback.
+
+| Cause | Raised by |
+|---|---|
+| 2 | illegal instruction (including any word with `instr[1:0] != 2'b11`) |
+| 3 | `ebreak` |
+| 4 / 6 | misaligned load / store |
+| 11 | `ecall` from M-mode |
+
+CSRs implemented: `mstatus` (MIE/MPIE), `mtvec` (direct mode), `mepc`,
+`mcause`, `mtval`. Anything else reads as zero and ignores writes. Interrupts
+are not implemented.
 
 ## Build System
 
