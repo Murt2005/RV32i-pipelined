@@ -300,13 +300,22 @@ typedef enum logic [2:0] {
     ,bgeu = 7
 }   branch_ops;
 
+// Branch condition, evaluated from the operands rather than from the ALU
+// result on purpose.
+//
+// Taking it from the ALU put the branch decision *after* the ALU's output mux,
+// which put the next-PC adder after that again -- two 32-bit adders and a wide
+// case mux in series on the critical path. Its own subtractor runs in parallel
+// with the ALU instead. The result is the same; only the depth changes.
 function automatic bool take_branch(ext_operand in1, ext_operand in2,
-                                   ext_operand alu_result, funct3 f3); begin
-    logic is_zero = (alu_result[31:0] == 32'd0) ? 1'b1 : 1'b0;
+                                   funct3 f3); begin
+    logic [`word_size:0] diff = {1'b0, in1[`word_size-1:0]}
+                              - {1'b0, in2[`word_size-1:0]};
+    logic is_zero = (diff[`word_size-1:0] == `word_size'd0) ? 1'b1 : 1'b0;
 
-    // alu_result is {1'b0,in1} - {1'b0,in2}, so bit 32 is the borrow out of an
-    // unsigned subtract, i.e. exactly (in1 <u in2).
-    logic ult = alu_result[`word_size];
+    // bit 32 is the borrow out of an unsigned subtract, i.e. exactly
+    // (in1 <u in2).
+    logic ult = diff[`word_size];
 
     // Signed less-than is NOT the sign bit of that difference: when the signed
     // subtraction overflows, the truncated result has the wrong sign. Flipping
@@ -330,40 +339,38 @@ function automatic bool take_branch(ext_operand in1, ext_operand in2,
 end
 endfunction
 
+// Next PC.
+//
+// The three candidate targets are added up front, in parallel with each other
+// and with the ALU, and only the select is serial. Previously this built one
+// adder whose *operands* were chosen by the opcode and the branch condition,
+// which chained the adder behind everything that produced them.
 function automatic word_address compute_next_pc(
      ext_operand    rd1
     ,ext_operand    rd2
-    ,ext_operand    alu_result
     ,word           imm
     ,word_address   pc
     ,opcode_q       op_q
     ,funct3         f3); begin
-    word in1 = pc;
-    word in2 = 4;
-    word target;
-    case (op_q)
-        q_jal:  in2 = imm;
-        q_jalr: begin
-            in1 = rd1[`word_size-1:0];
-            in2 = imm[`word_size-1:0];
-        end
-        q_branch:
-            if (take_branch(rd1, rd2, alu_result, f3))
-                in2 = imm[`word_size-1:0];
-        default: begin end
-    endcase
+    word pc_plus_4;
+    word pc_plus_imm;
+    word rs1_plus_imm;
 
-    target = in1 + in2;
-
+    pc_plus_4   = pc + `word_size'd4;
+    pc_plus_imm = pc + imm;
     // "The target address is obtained by adding the sign-extended 12-bit
     // I-immediate to the register rs1, then setting the least-significant bit
     // of the result to zero." Without this an odd target is fetched as-is: the
     // memory drops the low address bits but shuffle_store_data still rotates
     // the word by addr[1:0], so the pipeline executes garbage.
-    if (op_q == q_jalr)
-        target[0] = 1'b0;
+    rs1_plus_imm = (rd1[`word_size-1:0] + imm) & ~(`word_size'd1);
 
-    return target;
+    case (op_q)
+        q_jal:    return pc_plus_imm;
+        q_jalr:   return rs1_plus_imm;
+        q_branch: return take_branch(rd1, rd2, f3) ? pc_plus_imm : pc_plus_4;
+        default:  return pc_plus_4;
+    endcase
 end
 endfunction
 

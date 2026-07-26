@@ -689,7 +689,6 @@ always_comb begin
     next_pc_comb = compute_next_pc(
         cast_to_ext_operand(rd1),
         cast_to_ext_operand(rd2),
-        execute_result_comb,
         decoded_instruction_in.imm,
         decoded_instruction_in.pc,
         decoded_instruction_in.instruction_opcode,
