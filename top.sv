@@ -14,6 +14,7 @@ core the_core(
 	.clk(clk)
 	,.reset(reset)
 	,.stall(1'b0)               // simulation memories always accept a write
+	,.clear_regs(1'b0)          // the register file's `initial` block covers this
     ,.reset_pc(32'h0001_0000)
 	,.inst_mem_req(inst_mem_req)
 	,.inst_mem_rsp(inst_mem_rsp)

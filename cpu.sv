@@ -239,6 +239,7 @@ endmodule
 module decode_and_writeback(
     input logic clk,
     input logic reset,
+    input logic clear_regs,     // hold high >=32 cycles to zero the register file
 
     input stage_control_signal_t decode_control_signal_in,
     input stage_control_signal_t execute_control_signal_in,
@@ -263,6 +264,7 @@ word register_file[0:31];
 word register_file_bypass_rd;
 tag register_file_bypass_rs;
 bool register_file_bypass_valid;
+tag  clear_idx;
 
 // Bypass is driven combinationally from the same values we write to the reg file (see write-back block below).
 always_comb begin
@@ -332,16 +334,58 @@ always_ff @(posedge clk) begin
         decoded_instruction_out.rd2 <= register_file[rs2];
     end
 
-    // Write-back: commit result from writeback stage into register file and set bypass
+    // Write-back: record the bypass. The register file write itself is done by
+    // the single muxed port below.
     if (!reset
         && writeback_control_signal_in.advance
         && writeback_instruction_in.is_instruction_valid
         && writeback_instruction_in.is_writeback_valid) begin
-        register_file[writeback_instruction_in.wbs] <= writeback_instruction_in.wbd;
         register_file_bypass_rs <= writeback_instruction_in.wbs;
         register_file_bypass_rd <= writeback_instruction_in.wbd;
         register_file_bypass_valid <= true;
     end
+
+    // Sequential clear, one register per cycle.
+    if (clear_regs)
+        clear_idx <= clear_idx + 5'd1;
+    else
+        clear_idx <= 5'd0;
+end
+
+// ---------------------------------------------------------------------------
+// The register file's single write port, explicitly muxed between write-back
+// and the clear.
+//
+// Writing the array from two separate conditions infers a *second* write port,
+// which a 1W1R block RAM cannot provide -- yosys then refuses to map it and the
+// design stops fitting on the UP5K. Keeping one write site keeps it in BRAM.
+//
+// The clear exists because the `initial` block above is simulation-only: on
+// hardware the file is block RAM whose contents survive a core reset, so
+// without it a second run would inherit the previous program's registers.
+// ---------------------------------------------------------------------------
+logic wr_en;
+tag   wr_addr;
+word  wr_data;
+
+always_comb begin
+    if (clear_regs) begin
+        wr_en   = 1'b1;
+        wr_addr = clear_idx;
+        wr_data = `word_size'd0;
+    end else begin
+        wr_en   = !reset
+                  && writeback_control_signal_in.advance
+                  && writeback_instruction_in.is_instruction_valid
+                  && writeback_instruction_in.is_writeback_valid;
+        wr_addr = writeback_instruction_in.wbs;
+        wr_data = writeback_instruction_in.wbd;
+    end
+end
+
+always_ff @(posedge clk) begin
+    if (wr_en)
+        register_file[wr_addr] <= wr_data;
 end
 endmodule
 
@@ -758,6 +802,7 @@ module core #(
     input logic       clk,
     input logic       reset,
     input logic       stall,          // freeze the whole pipeline (peripheral backpressure)
+    input logic       clear_regs,     // zero the register file (hold >=32 cycles)
     input logic       [`word_address_size-1:0] reset_pc,
     output memory_io_req   inst_mem_req,
     input  memory_io_rsp   inst_mem_rsp,
@@ -794,6 +839,7 @@ writeback_instruction_t writeback_instruction;
 decode_and_writeback decode_and_writeback_m(
     .clk(clk),
     .reset(reset),
+    .clear_regs(clear_regs),
     .decode_control_signal_in(decode_control_signal),
     .execute_control_signal_in(execute_control_signal),
     .writeback_control_signal_in(writeback_control_signal),

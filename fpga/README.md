@@ -103,7 +103,7 @@ idle state so idle filler is harmless.
 | Cmd | | Response |
 |---|---|---|
 | `P` 0x50 | ping | `p` 0x70, version |
-| `Z` 0x5A | zero both memories | `z` 0x7A |
+| `Z` 0x5A | zero both memories and the register file | `z` 0x7A |
 | `W` 0x57 | write: `addr[4] len[2] data[len]` | `w` 0x77 |
 | `R` 0x52 | read: `addr[4] len[2]` | `r` 0x72, then `len` bytes |
 | `G` 0x47 | go | `g` 0x67, then program output until `0x04` (EOT) |
@@ -216,9 +216,13 @@ was hiding. The `T` command drives it from an LFSR instead, reseeded on every
 the queue-backpressure term is what guarantees no byte is dropped, and stalling
 more never breaks it.
 
-**Hardware and simulation must start from the same memory.** `memory.sv` zeroes
-its arrays in an `initial` block, so every simulated run begins with all-zero
-memory. SPRAM keeps its contents across runs. `hazards/branch_after_load`
+**Hardware and simulation must start from the same state.** `memory.sv` and the
+register file are both zeroed by `initial` blocks, so every simulated run begins
+clean. SPRAM and the block-RAM register file both keep their contents across
+runs, so `Z` clears both. Note the register file's write port has to stay a
+*single* muxed site: writing the array from two separate conditions infers a
+second write port, which a 1W1R block RAM cannot provide, and the design stops
+fitting. `hazards/branch_after_load`
 asserts that a location its own program never writes is still zero — it passed
 in simulation and failed on hardware purely because of the previous test's
 leftovers. Hence the `Z` command, which clears both memories in 16384 cycles

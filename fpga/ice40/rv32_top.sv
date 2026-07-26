@@ -166,6 +166,14 @@ module rv32_top #(
     logic [7:0]  stall_rate;       // 0 disables; higher stalls more often
     logic [15:0] lfsr;
 
+    // Memory + register clear. SPRAM and the block-RAM register file both keep
+    // their contents across runs, while the simulator's memory.sv and register
+    // file are zeroed by `initial` blocks. Without this the two do not start
+    // from the same state, and a test that asserts a location the program never
+    // writes passes in simulation and fails on hardware for a reason that has
+    // nothing to do with the pipeline.
+    logic        zeroing;
+
     assign cpu_reset = rst | ~cpu_run;
 
     memory_io_req cpu_inst_req, cpu_data_req;
@@ -175,6 +183,10 @@ module rv32_top #(
         .clk(clk),
         .reset(cpu_reset),
         .stall(cpu_stall),
+        // 'Z' means "restore the state a fresh simulation would start from",
+        // which is memory *and* registers. The clear takes 32 cycles and the
+        // memory pass takes 16384, so it is always finished first.
+        .clear_regs(zeroing),
         .reset_pc(RESET_PC),
         .inst_mem_req(cpu_inst_req),
         .inst_mem_rsp(inst_rsp),
@@ -243,13 +255,6 @@ module rv32_top #(
     logic         halt_pending;
     logic [7:0]   rx_err_count;
     logic [1:0]   bid_idx;
-    // Memory clear. SPRAM keeps its contents across runs, while the simulator's
-    // memory.sv zeroes its arrays in an `initial` block. Without this the two
-    // do not start from the same state, and a test that asserts a location the
-    // program never writes (e.g. "the wrong-path store must not have
-    // committed") passes in simulation and fails on hardware for a reason that
-    // has nothing to do with the pipeline.
-    logic         zeroing;
     logic [13:0]  zero_addr;
 
     // Memory read-back. Needed to compare architectural state against a
