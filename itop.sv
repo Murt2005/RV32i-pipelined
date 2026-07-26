@@ -34,8 +34,12 @@ initial begin
     // Watchdog. Without it a program that never reaches the halt address hangs
     // the simulator forever, which turns one bad test into a stuck suite.
     //   ./result-iverilog +timeout=50000
+    // Deliberately modest. A program that never halts costs this many cycles
+    // per test, and a suite runs dozens of them -- at 500000 a broken change
+    // makes the suite look like it has hung rather than failed. Raise it with
+    // +timeout=<n> for genuinely long programs.
     if (!$value$plusargs("timeout=%d", max_cycles))
-        max_cycles = 500000;
+        max_cycles = 120000;
 
     // Stall the pipeline pseudo-randomly:  ./result-iverilog +stallrate=128
     if (!$value$plusargs("stallrate=%d", stall_rate))

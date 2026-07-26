@@ -95,8 +95,8 @@ UART ends therefore derive from the same crystal and cannot drift.
 `firmware/main.c`. The baud divisor is a synthesis-time constant, so a mismatch
 garbles bytes rather than producing silence.
 
-**Utilisation** (`nextpnr --up5k --package sg48`): 4246/5280 LC (80%),
-5/30 BRAM, 4/4 SPRAM, 8.0 MHz vs a 6 MHz constraint.
+**Utilisation** (`nextpnr --up5k --package sg48`): 4854/5280 LC (91%),
+6/30 BRAM, 4/4 SPRAM, 7.6 MHz vs a 6 MHz constraint.
 
 ## Performance
 
@@ -112,15 +112,28 @@ each time it is released:
 taken branch and a store — and stores both counters where the host can read them:
 
 ```
-cycles   : 32017
-retired  : 20012
-IPC      : 0.625
-at 6 MHz : 5.34 ms, 3.75 MIPS
+                    no BTB      with BTB
+cycles              32017        24022
+retired             20012        20012
+IPC                 0.625        0.833
+at 6 MHz          3.75 MIPS    5.00 MIPS
 ```
 
-The gap is mostly taken branches: every one costs a redirect and a decode flush,
-because `core`'s `btb_enable` parameter is still a stub and nothing predicts.
-That is the number to beat before and after any branch-prediction work.
+The gap was almost entirely taken branches — each one cost a redirect and a
+decode flush. `core` now has a 16-entry direct-mapped branch target buffer
+behind its `btb_enable` parameter (`btb_entries` sets the size), worth 33% on
+this workload.
+
+It is a pure hint: execute already compares the resolved next PC against what
+fetch actually fetched and redirects on any mismatch, so a wrong prediction
+costs exactly what having no predictor costs. Only the low 14 bits of the
+target are stored and the branch's own upper bits are reused, so a target in a
+different 64K region mispredicts rather than being stored wrongly — that is
+what keeps the table affordable.
+
+**It is not free in area**: 4246 → 4854 LC (80% → 91%), and fMax drops 8.0 →
+7.6 MHz. That is inside the ≤93% the board can reliably place, but not by much;
+drop `btb_entries` to 8, or set `btb_enable = 0`, to get the area back.
 
 ## Wire protocol
 

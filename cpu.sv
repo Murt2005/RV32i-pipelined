@@ -75,6 +75,18 @@ typedef struct packed {
     riscv::word branch_target_pc; // where fetch should go over branch
 } pc_control_t;
 
+// Branch-target-buffer training, from execute back to fetch. A prediction only
+// changes *when* fetch goes somewhere, never whether the result is correct:
+// execute already compares the resolved next PC against what fetch actually
+// fetched, and redirects on any mismatch, so a wrong prediction costs exactly
+// what no prediction costs today.
+typedef struct packed {
+    bool        valid;      // a control-flow instruction resolved this cycle
+    bool        taken;      // its next PC is not pc + 4
+    riscv::word pc;
+    riscv::word target;
+} btb_update_t;
+
 // Trap taken in the execute stage. Execute is the commit point: instructions
 // behind a redirect are already flushed at decode before they get here, so an
 // exception raised here is precise -- the faulting instruction is turned into a
@@ -103,7 +115,10 @@ typedef struct packed {
 // Handles: PC increment, stream clear (flush in-flight requests), and external set-PC
 // (branch/jump target or mispredict correction from control).
 // ---------------------------------------------------------------------------
-module fetch(
+module fetch #(
+    parameter btb_enable  = 1,
+    parameter btb_entries = 16          // must be a power of two
+) (
     input logic                                 clk,
     input logic                                 reset,
     input logic                                 [`word_address_size-1:0] reset_pc,
@@ -111,6 +126,7 @@ module fetch(
     input stage_control_signal_t                fetch_control_signal_in,
 
     input branch_pc_redirect_request_t          branch_pc_redirect_request_in,
+    input btb_update_t                          btb_update_in,
 
     output memory_io_req                        instruction_memory_request,
     input memory_io_rsp                         instruction_memory_response,
@@ -132,6 +148,32 @@ word latched_instruction_pc;
 // when nothing is latched yet (see the stall handling below).
 word issued_pc;
 bool issued_valid;
+
+// ---------------------------------------------------------------------------
+// Branch target buffer: direct mapped, no history, predict taken on a hit.
+//
+// Only the low bits of the target are stored, with the branch's own upper bits
+// reused to rebuild it. A target in a different 64K region simply mispredicts
+// and gets corrected, so this costs accuracy on far jumps rather than
+// correctness -- and it keeps the table small enough to fit on a UP5K that is
+// already 80% full.
+// ---------------------------------------------------------------------------
+localparam int BTB_IDX_W = $clog2(btb_entries);
+localparam int BTB_TAG_W = 8;
+
+logic [BTB_TAG_W-1:0] btb_tag    [0:btb_entries-1];
+logic [13:0]          btb_target [0:btb_entries-1];
+logic                 btb_valid  [0:btb_entries-1];
+
+wire [BTB_IDX_W-1:0] btb_rd_idx = fetch_pc[BTB_IDX_W+1:2];
+wire [BTB_TAG_W-1:0] btb_rd_tag = fetch_pc[BTB_IDX_W+1+BTB_TAG_W:BTB_IDX_W+2];
+wire                 btb_hit    = (btb_enable != 0) && btb_valid[btb_rd_idx]
+                                && (btb_tag[btb_rd_idx] == btb_rd_tag);
+wire [`word_size-1:0] btb_predicted = {fetch_pc[`word_size-1:16],
+                                       btb_target[btb_rd_idx], 2'b00};
+
+wire [BTB_IDX_W-1:0] btb_wr_idx = btb_update_in.pc[BTB_IDX_W+1:2];
+wire [BTB_TAG_W-1:0] btb_wr_tag = btb_update_in.pc[BTB_IDX_W+1+BTB_TAG_W:BTB_IDX_W+2];
 
 // Combinational: instruction memory request and fetch output
 always @(*) begin
@@ -169,6 +211,8 @@ always_ff @(posedge clk) begin
         clear_to_this_pc <= 0;
         issued_pc <= 0;
         issued_valid <= false;
+        for (int i = 0; i < btb_entries; i++)
+            btb_valid[i] <= 1'b0;
     end else begin
         issued_valid <= instruction_memory_request.valid;
         if (instruction_memory_request.valid)
@@ -189,9 +233,26 @@ always_ff @(posedge clk) begin
             end
         end
 
-        // if we issued a request this cycle and it was accepted, update PC += 4
+        // If we issued a request this cycle, follow the prediction for where the
+        // next one goes. A redirect below overrides this.
         if (instruction_memory_request.valid) begin
-            fetch_pc <= fetch_pc + 4;
+            if (btb_hit)
+                fetch_pc <= btb_predicted;
+            else
+                fetch_pc <= fetch_pc + 4;
+        end
+
+        // Train on resolved control-flow instructions.
+        if ((btb_enable != 0) && btb_update_in.valid) begin
+            if (btb_update_in.taken) begin
+                btb_valid[btb_wr_idx]  <= 1'b1;
+                btb_tag[btb_wr_idx]    <= btb_wr_tag;
+                btb_target[btb_wr_idx] <= btb_update_in.target[15:2];
+            end else if (btb_valid[btb_wr_idx] && (btb_tag[btb_wr_idx] == btb_wr_tag)) begin
+                // Fell through: stop predicting it, or every pass would
+                // mispredict twice instead of once.
+                btb_valid[btb_wr_idx] <= 1'b0;
+            end
         end
 
         // redirect fetch PC if needed
@@ -415,7 +476,8 @@ module execute(
     input decoded_instruction_t decoded_instruction_in,
     output executed_instruction_t executed_instruction_out,
 
-    output pc_control_t pc_control_out
+    output pc_control_t pc_control_out,
+    output btb_update_t btb_update_out
 );
 
 import riscv::*;
@@ -626,6 +688,8 @@ always_comb begin
     else if (decoded_instruction_in.is_instruction_valid && is_mret)
         next_pc_comb = mepc_r;
 
+    // Train the branch predictor on resolved control transfers only. Traps
+    // also change the next PC, but predicting them would be meaningless.
     // Default: no PC correction
     pc_control_out = {($bits(pc_control_t)){1'b0}};
     pc_control_out.branch_redirect_needed = false;
@@ -637,6 +701,30 @@ always_comb begin
         pc_control_out.branch_target_pc = next_pc_comb;
     end
 
+end
+
+// Branch predictor training. Registered, deliberately.
+//
+// Qualifying this combinationally on execute_control_signal_in.advance would
+// make this block depend on a `control` output, and `control` already depends
+// on pc_control_out from the same block -- that closes a combinational loop
+// which oscillates rather than settling, and wedges the simulator in zero time.
+// Training a cycle late costs nothing: it is a prediction hint, not state the
+// pipeline depends on.
+always_ff @(posedge clk) begin
+    btb_update_out <= {($bits(btb_update_t)){1'b0}};
+    if (!reset
+        && decoded_instruction_in.is_instruction_valid
+        && execute_control_signal_in.advance
+        && !trap.taken
+        && ((decoded_instruction_in.instruction_opcode == q_branch)
+         || (decoded_instruction_in.instruction_opcode == q_jal)
+         || (decoded_instruction_in.instruction_opcode == q_jalr))) begin
+        btb_update_out.valid  <= true;
+        btb_update_out.pc     <= decoded_instruction_in.pc;
+        btb_update_out.target <= next_pc_comb;
+        btb_update_out.taken  <= (next_pc_comb != (decoded_instruction_in.pc + 4));
+    end
 end
 
 // Sequential: pass instruction to memory stage, update CSRs and PC tracking
@@ -951,7 +1039,8 @@ endmodule
 // Core: top-level 5-stage RISC-V pipeline (Fetch -> Decode -> Execute -> Memory -> Writeback).
 // ---------------------------------------------------------------------------
 module core #(
-    parameter btb_enable = false
+    parameter btb_enable  = 1,
+    parameter btb_entries = 16
 ) (
     input logic       clk,
     input logic       reset,
@@ -974,12 +1063,18 @@ branch_pc_redirect_request_t branch_pc_redirect_request;
 
 fetched_instruction_t fetched_instruction;
 
-fetch fetch_m(
+btb_update_t btb_update;
+
+fetch #(
+    .btb_enable(btb_enable),
+    .btb_entries(btb_entries)
+) fetch_m(
     .clk(clk),
     .reset(reset),
     .reset_pc(reset_pc),
     .fetch_control_signal_in(fetch_control_signal),
     .branch_pc_redirect_request_in(branch_pc_redirect_request),
+    .btb_update_in(btb_update),
     .instruction_memory_request(inst_mem_req),
     .instruction_memory_response(inst_mem_rsp),
     .fetched_instruction_out(fetched_instruction)
@@ -1017,7 +1112,8 @@ execute execute_m(
     .writeback_instruction_in(writeback_instruction),
     .decoded_instruction_in(decoded_instruction),
     .executed_instruction_out(executed_instruction),
-    .pc_control_out(pc_control)
+    .pc_control_out(pc_control),
+    .btb_update_out(btb_update)
 );
 
 memory_instruction_t memory_instruction;
