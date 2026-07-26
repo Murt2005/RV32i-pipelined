@@ -12,7 +12,8 @@ Memory map (from `ld.script`): `.text` at `0x00010000`, `.rodata`/`.data`/`.bss`
 
 ## Supported instructions
 
-The core implements **RV32I** only (no M, A, F, or other extensions). Supported instructions:
+The core implements **RV32I** plus the machine-mode CSRs and traps the base ISA
+needs. Supported instructions:
 
 | Instruction Type | Instructions |
 |-------------------|--------------|
@@ -25,6 +26,25 @@ The core implements **RV32I** only (no M, A, F, or other extensions). Supported 
 | **JAL** | `jal` |
 | **JALR** | `jalr` |
 | **LUI** | `lui` |
+| **MISC-MEM** | `fence` (architecturally a NOP: in-order pipeline, separate instruction and data memories) |
+| **SYSTEM** | `csrrw`, `csrrs`, `csrrc`, `csrrwi`, `csrrsi`, `csrrci`, `ecall`, `ebreak`, `mret` |
+
+### Exceptions
+
+Traps are taken in the execute stage, which is the commit point — instructions
+behind a redirect are already flushed at decode before they get there, so the
+faulting instruction is turned into a bubble and never reaches writeback.
+
+| Cause | Raised by |
+|---|---|
+| 2 | illegal instruction (including any word with `instr[1:0] != 2'b11`) |
+| 3 | `ebreak` |
+| 4 / 6 | misaligned load / store |
+| 11 | `ecall` from M-mode |
+
+CSRs implemented: `mstatus` (MIE/MPIE), `mtvec` (direct mode), `mepc`,
+`mcause`, `mtval`. Anything else reads as zero and ignores writes. Interrupts
+are not implemented.
 
 ## Build System
 
@@ -55,11 +75,25 @@ Tests are RV32I assembly programs under `tests/isa/` (ISA correctness) and `test
 
 - **`tests/isa/`** — add/sub, shifts, logic, compare, loads/stores (basic and sign-ext), LUI/AUIPC, branches (basic/signed/unsigned), jumps (JAL/JALR).
 - **`tests/hazards/`** — load-use stalls, load chains, branch-after-load/ALU, EX–EX and MEM–EX data hazards, bypass stress.
-- **`tests/riscv-tests/`** — the official [riscv-tests](https://github.com/riscv-software-src/riscv-tests) suite (submodule). The 40 `rv32ui` tests are built against a local environment in `tests/riscv-tests-env/`, because the suite's own `p` environment reports results via machine-mode CSRs and `ECALL` that this core does not implement. `fence_i` and `ma_data` are excluded: the first needs self-modifying code, which a Harvard machine with a separate instruction memory cannot do, and the second needs misaligned-access support the core neither implements nor traps.
+- **`tests/riscv-tests/`** — the official [riscv-tests](https://github.com/riscv-software-src/riscv-tests) suite (submodule). The 40 `rv32ui` tests run two ways, and both pass:
+  - against a local environment (`tests/riscv-tests-env/riscv_test.h`) that reports through this project's MMIO registers, and
+  - against the suite's **stock `p` environment**, which reports through an `ECALL` trap handler and the `tohost` location — so it exercises `mtvec`/`mepc`/`mcause`/`ECALL`/`MRET` on every test. `tests/riscv-tests-env/link-p.ld` places `.tohost` at `0x0002FFC0`, which the tops treat as a halt.
+
+  `fence_i` and `ma_data` are excluded. The first needs self-modifying code, which a Harvard machine with a separate instruction memory cannot do. The second requires *emulating* misaligned accesses in a trap handler; this core takes the other behaviour the spec allows and traps on them.
 
 Run one test: `make run-test-<name>-iverilog` (e.g. `run-test-isa-add_sub-iverilog`). Run all: `make run-tests-iverilog`.
 
 Against real hardware (see `fpga/README.md`), `host/rv32_diff.py` additionally runs randomly generated programs on the FPGA and on `host/rv32_model.py`, a plain instruction-at-a-time RV32I interpreter, and compares all 30 general registers plus the scratch memory. Because the model has no pipeline, bypassing or hazard logic, it shares no structure with the RTL — which is what makes the comparison meaningful. This is how the `blt`/`bge` signed-overflow bug was found.
+
+## Formal verification
+
+`formal/` runs [riscv-formal](https://github.com/YosysHQ/riscv-formal) against
+the core through an RVFI commit port. **All 43 checks pass**: 37 per-instruction
+proofs covering RV32I, plus `reg`, `pc_fwd`, `pc_bwd`, `causal`, `unique` and
+`liveness`. See `formal/README.md`.
+
+Unlike the test suites, these reason about *every* operand value and every
+reachable pipeline state rather than the ones a test happened to pick.
 
 ## Make Targets
 
@@ -72,7 +106,10 @@ Against real hardware (see `fpga/README.md`), `host/rv32_diff.py` additionally r
 | `make run-test-<name>-iverilog` | Build ELF for `tests/<name>.s` (e.g. `isa/add_sub` → `run-test-isa-add_sub-iverilog`), run that test under Icarus. |
 | `make run-tests-iverilog` | Run all tests under `tests/isa/` and `tests/hazards/`. |
 | `make riscv-tests` | Build the official riscv-tests `rv32ui` suite into `build/riscv-tests/`. |
-| `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus. |
+| `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus (local environment). |
+| `make run-riscv-tests-p-iverilog` | Run the same tests under the suite's **stock `p` environment**. |
+| `make rvfi-check` | Cross-check the RVFI commit record against `host/rv32_model.py` for every test. |
+| `make coverage` | Verilator line/toggle coverage over both suites; annotated output in `build/cov/annotated/`. |
 | `make clean` | Remove build artifacts, `*.hex`, `test`, sim binaries, `test.vcd`, `obj_dir/`. |
 
 **Note**: `result-iverilog` and `result-verilator` depend on `test`; ensure `test.c` and `start.s` are built and `elftohex.sh` has been run so `code*.hex` and `data*.hex` exist before simulating.

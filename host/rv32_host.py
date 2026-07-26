@@ -43,6 +43,8 @@ CMD_READ   = 0x52   # 'R' -> addr[4] len[2],  then 0x72 and len bytes
 CMD_GO     = 0x47   # 'G' -> 0x67, then program output until EOT
 CMD_HALT   = 0x48   # 'H' -> 0x68
 CMD_STATUS = 0x53   # 'S' -> 0x73, status byte
+CMD_TRATE  = 0x54   # 'T' -> rate[1],  then 0x74
+CMD_BUILD  = 0x42   # 'B' -> 0x62 and 4 bytes LE
 
 RSP_PING   = 0x70
 RSP_ZERO   = 0x7A
@@ -51,9 +53,11 @@ RSP_READ   = 0x72
 RSP_GO     = 0x67
 RSP_HALT   = 0x68
 RSP_STATUS = 0x73
+RSP_TRATE  = 0x74
+RSP_BUILD  = 0x62
 EOT        = 0x04
 
-PROTO_VERSION = 0x03
+PROTO_VERSION = 0x05
 
 BAUD = 500000          # must equal BAUD_RATE in fpga/ice40/Makefile
 
@@ -114,6 +118,30 @@ class Rv32Board:
         self.ser.write(bytes([CMD_HALT]))
         self.ser.flush()
         self._expect(RSP_HALT, "halt")
+
+    def build_id(self):
+        """Hash of the RTL the flashed bitstream was built from."""
+        self.ser.write(bytes([CMD_BUILD]))
+        self.ser.flush()
+        self._expect(RSP_BUILD, "build id")
+        raw = self.ser.read(4)
+        if len(raw) != 4:
+            raise Rv32Error("build id: short reply")
+        return int.from_bytes(raw, "little")
+
+    def set_stall_rate(self, rate):
+        """
+        Drive the core's stall input from an LFSR `rate`/256 of the time.
+
+        Normally `stall` only ever comes from transmit-queue backpressure,
+        which is tied to how often the program prints and so barely exercises
+        the stall/redirect interaction in the pipeline. 0 restores that.
+        """
+        if not 0 <= rate <= 255:
+            raise Rv32Error(f"stall rate {rate} out of range 0..255")
+        self.ser.write(bytes([CMD_TRATE, rate]))
+        self.ser.flush()
+        self._expect(RSP_TRATE, "stall rate")
 
     def resync(self):
         """
@@ -252,6 +280,46 @@ def _find_objcopy():
 # ---------------------------------------------------------------------------
 # Port discovery
 # ---------------------------------------------------------------------------
+def local_build_id(repo_root):
+    """
+    Hash the RTL sources the same way fpga/ice40/Makefile does.
+
+    The protocol version only tracks the wire protocol, so a bitstream built
+    from older core RTL answers a ping perfectly happily. Comparing this
+    against what the board reports turns "mysterious hardware bug" back into
+    "you forgot to reflash".
+    """
+    import hashlib
+    ice = os.path.join(repo_root, "fpga", "ice40")
+    listing = os.path.join(ice, "rtl-sources.txt")
+    if not os.path.exists(listing):
+        return None
+    blob = b""
+    with open(listing) as f:
+        for name in f.read().split():
+            path = os.path.join(ice, name)
+            if not os.path.exists(path):
+                return None
+            with open(path, "rb") as src:
+                blob += src.read()
+    return int(hashlib.sha256(blob).hexdigest()[:8], 16)
+
+
+def check_build_id(board, repo_root):
+    """Warn if the flashed bitstream predates the RTL in the working tree."""
+    try:
+        on_board = board.build_id()
+    except Rv32Error:
+        return
+    local = local_build_id(repo_root)
+    if local is None or on_board == local:
+        return
+    print(f"warning: bitstream was built from different RTL "
+          f"(board 0x{on_board:08x}, sources 0x{local:08x}).\n"
+          f"         run `make -C fpga/ice40 prog` to reflash.",
+          file=sys.stderr)
+
+
 def candidate_ports():
     seen = []
     for p in list_ports.comports():
@@ -272,6 +340,7 @@ def open_board(port=None, verbose=False):
         return b
 
     errors = []
+    mismatch = None
     for cand in candidate_ports():
         try:
             b = Rv32Board(cand, timeout=0.6, verbose=verbose)
@@ -282,6 +351,10 @@ def open_board(port=None, verbose=False):
             b.resync()
             ver = b.ping()
             if ver != PROTO_VERSION:
+                # Answered, so this *is* the right port -- the bitstream is
+                # just older than this host. Say so plainly instead of
+                # reporting it as "nothing responded".
+                mismatch = (cand, ver)
                 raise Rv32Error(f"protocol version {ver}, expected {PROTO_VERSION}")
             b.ser.timeout = 2.0
             if verbose:
@@ -290,6 +363,13 @@ def open_board(port=None, verbose=False):
         except Exception as exc:
             errors.append(f"  {cand}: {exc}")
             b.close()
+
+    if mismatch:
+        cand, ver = mismatch
+        raise Rv32Error(
+            f"{cand} answered with protocol v{ver}, but this host speaks "
+            f"v{PROTO_VERSION}.\nThe flashed bitstream is older than the "
+            f"working tree -- run `make -C fpga/ice40 prog` to reflash.")
 
     raise Rv32Error("no port answered a ping. Tried:\n" + "\n".join(errors) +
                     "\n\nCheck: firmware flashed, gateware flashed, and the "
@@ -365,6 +445,29 @@ def do_riscv_tests(board, repo_root, timeout):
     return 0 if nfail == 0 else 1
 
 
+BENCH_RESULT_ADDR = 0x00021800
+
+
+def do_bench(board, elf, timeout):
+    """Run a workload that samples the performance counters and report IPC."""
+    _, halted = run_elf(board, elf, timeout=timeout, quiet=True)
+    if not halted:
+        print("benchmark did not halt", file=sys.stderr)
+        return 1
+    raw = board.read_mem(BENCH_RESULT_ADDR, 8)
+    cycles = int.from_bytes(raw[0:4], "little")
+    retired = int.from_bytes(raw[4:8], "little")
+    if cycles == 0:
+        print("counters read back zero -- is the bitstream current?", file=sys.stderr)
+        return 1
+    print(f"cycles   : {cycles}")
+    print(f"retired  : {retired}")
+    print(f"IPC      : {retired / cycles:.3f}")
+    print(f"at 6 MHz : {cycles / 6e6 * 1e3:.2f} ms, "
+          f"{retired / (cycles / 6e6) / 1e6:.2f} MIPS")
+    return 0
+
+
 def do_regress(board, repo_root, timeout):
     stems = []
     for sub in ("isa", "hazards"):
@@ -417,13 +520,16 @@ def main():
                     help="run every test in tests/ and diff against simulation")
     ap.add_argument("--riscv-tests", action="store_true",
                     help="run the official rv32ui suite from build/riscv-tests")
+    ap.add_argument("--bench", metavar="ELF",
+                    help="run a counter-sampling workload and report IPC")
     ap.add_argument("--timeout", type=float, default=15.0,
                     help="seconds to wait for the halt sentinel")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
-    if not (args.elf or args.probe or args.regress or args.riscv_tests):
-        ap.error("give one of --elf, --probe, --regress or --riscv-tests")
+    if not (args.elf or args.probe or args.regress or args.riscv_tests
+            or args.bench):
+        ap.error("give one of --elf, --probe, --regress, --riscv-tests or --bench")
 
     try:
         board = open_board(args.port, verbose=args.verbose)
@@ -432,11 +538,14 @@ def main():
         return 2
 
     try:
+        check_build_id(board, repo_root)
         if args.probe:
             do_probe(board)
         if args.elf:
             _, halted = run_elf(board, args.elf, timeout=args.timeout)
             return 0 if halted else 1
+        if args.bench:
+            return do_bench(board, args.bench, args.timeout)
         if args.riscv_tests:
             return do_riscv_tests(board, repo_root, args.timeout)
         if args.regress:

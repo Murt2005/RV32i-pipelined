@@ -1,10 +1,13 @@
 // Environment for running the official riscv-tests rv32ui suite on this core.
 //
-// The suite's own `p` environment cannot be used: it needs machine-mode CSRs
-// (mtvec, mcause), ECALL and a trap vector to report results, and this core
-// implements none of those -- q_system decodes to q_unknown and executes as a
-// NOP. This environment reports results through the same MMIO putchar/halt
-// registers the rest of the test suite uses instead.
+// The suite's own `p` environment is not used: it reports results through an
+// ECALL trap handler and a `tohost` location that a host simulator polls,
+// neither of which fits this board. This environment reports through the same
+// MMIO putchar/halt registers the rest of the test suite uses instead.
+//
+// (The core does now implement mtvec/mepc/mcause and ECALL, so moving to the
+// stock `p` environment is possible -- see tests/isa/traps.s for coverage of
+// that machinery.)
 //
 // A test prints exactly one line:
 //     PASS
@@ -18,7 +21,7 @@
 
 #define MMIO_PUTCHAR 0x0002FFF8
 #define MMIO_HALT    0x0002FFFC
-#define STACK_TOP    0x0002FFF0
+#define STACK_TOP    0x0002FFE0
 
 #define TESTNUM gp
 

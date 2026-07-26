@@ -3,6 +3,10 @@
 #
 # UART output: write byte/word to 0x0002FFF8
 # HALT:        write any value to 0x0002FFFC
+# CYCLES:      read 0x0002FFF0   (free-running while the core runs)
+# RETIRED:     read 0x0002FFF4   (instructions committed)
+#
+# The stack starts below all of these, at STACK_TOP - 32.
 #
 # Conventions:
 # - Macros clobber: a0, t0, t1, s10, s11 (ASSERT/print helpers use s10/s11).
@@ -11,6 +15,8 @@
 
 .set UART_ADDR, 0x0002FFF8
 .set HALT_ADDR, 0x0002FFFC
+.set CYCLE_ADDR, 0x0002FFF0
+.set RETIRED_ADDR, 0x0002FFF4
 .set STACK_TOP, 0x00030000
 
 .macro TEST_FILE_HEADER header_label

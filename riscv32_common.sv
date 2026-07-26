@@ -162,6 +162,13 @@ typedef enum logic [4:0] {
 } opcode_q;
 
 function automatic opcode_q decode_opcode_q(instr32 instr);
+    // Every 32-bit instruction has instr[1:0] == 2'b11. Any other value is a
+    // 16-bit compressed encoding, which this core does not implement, so it is
+    // illegal. Checking only instr[6:2] decoded the all-zero word -- the
+    // canonical illegal instruction -- as `lb x0, 0(x0)` and executed it.
+    if (instr[1:0] != 2'b11)
+        return q_unknown;
+
     // return instr[6:2]   --- this works too, but the code below detects opcodes we don't support
     case (instr[6:2])
 // Unfortunately Vivado complains about the simple way. So we take the long way (below)
@@ -176,6 +183,12 @@ function automatic opcode_q decode_opcode_q(instr32 instr);
             q_op:       return q_op;
             q_auipc:    return q_auipc;
             q_lui:      return q_lui;
+            q_system:   return q_system;
+            // FENCE. This core has a single in-order pipeline and separate
+            // instruction and data memories, so it is architecturally a NOP --
+            // but it must decode, or it would now raise an illegal-instruction
+            // trap.
+            q_misc_mem: return q_misc_mem;
         default:
             return q_unknown;
     endcase
@@ -184,6 +197,9 @@ endfunction
 function automatic bool decode_writeback(opcode_q in);
     case (in)
         q_load, q_jalr, q_jal, q_op_imm, q_op, q_auipc, q_lui:  return 1'b1;
+        // SYSTEM writes rd only for the CSR forms; execute squashes the write
+        // for ECALL/EBREAK/MRET, which encode rd as x0 anyway.
+        q_system: return 1'b1;
         default: return 1'b0;
     endcase
 endfunction
@@ -212,7 +228,7 @@ endfunction
 
 function automatic instr_format decode_format(opcode_q op_q);
     case (op_q)
-        q_load, q_op_imm, q_jalr:  return i_format;
+        q_load, q_op_imm, q_jalr, q_system:  return i_format;
         q_jal:              return j_format;
         q_branch:           return b_format;
         q_op:               return r_format;
@@ -227,6 +243,51 @@ function automatic funct7 decode_funct7(instr32 instr, instr_format format);
     if (format == r_format || format == i_format)
         return instr[31:25];
     return 7'd0;
+endfunction
+
+// ---------------------------------------------------------------------------
+// Machine-mode CSRs and traps.
+//
+// Only the handful the base ISA needs to take and return from a trap. Anything
+// unimplemented reads as zero and ignores writes, which is what the spec allows
+// for read-only-zero CSRs and keeps the register file tiny.
+// ---------------------------------------------------------------------------
+localparam [11:0] csr_mstatus = 12'h300;
+localparam [11:0] csr_mtvec   = 12'h305;
+localparam [11:0] csr_mepc    = 12'h341;
+localparam [11:0] csr_mcause  = 12'h342;
+localparam [11:0] csr_mtval   = 12'h343;
+
+// Standard mcause codes for the exceptions this core can raise.
+localparam [31:0] cause_misaligned_fetch = 32'd0;
+localparam [31:0] cause_illegal_instr    = 32'd2;
+localparam [31:0] cause_breakpoint       = 32'd3;
+localparam [31:0] cause_misaligned_load  = 32'd4;
+localparam [31:0] cause_misaligned_store = 32'd6;
+localparam [31:0] cause_ecall_m          = 32'd11;
+
+// funct3 for the SYSTEM opcode. 0 is the non-CSR group (ECALL/EBREAK/MRET).
+typedef enum logic [2:0] {
+     f3_priv   = 3'b000
+    ,f3_csrrw  = 3'b001
+    ,f3_csrrs  = 3'b010
+    ,f3_csrrc  = 3'b011
+    ,f3_csrrwi = 3'b101
+    ,f3_csrrsi = 3'b110
+    ,f3_csrrci = 3'b111
+} f3_system;
+
+function automatic bool is_csr_op(funct3 f3);
+    return (f3 != 3'b000);
+endfunction
+
+// Alignment check for a data access of the width implied by funct3.
+function automatic bool is_misaligned(word addr, memory_op op);
+    case (op)
+        memory_h, memory_hu: return addr[0];
+        memory_w:            return (addr[1:0] != 2'b00);
+        default:             return 1'b0;   // byte accesses are always aligned
+    endcase
 endfunction
 
 // Must match instruction encoding
@@ -279,6 +340,7 @@ function automatic word_address compute_next_pc(
     ,funct3         f3); begin
     word in1 = pc;
     word in2 = 4;
+    word target;
     case (op_q)
         q_jal:  in2 = imm;
         q_jalr: begin
@@ -290,7 +352,18 @@ function automatic word_address compute_next_pc(
                 in2 = imm[`word_size-1:0];
         default: begin end
     endcase
-    return in1 + in2;
+
+    target = in1 + in2;
+
+    // "The target address is obtained by adding the sign-extended 12-bit
+    // I-immediate to the register rs1, then setting the least-significant bit
+    // of the result to zero." Without this an odd target is fetched as-is: the
+    // memory drops the low address bits but shuffle_store_data still rotates
+    // the word by addr[1:0], so the pipeline executes garbage.
+    if (op_q == q_jalr)
+        target[0] = 1'b0;
+
+    return target;
 end
 endfunction
 
@@ -316,6 +389,9 @@ function automatic ext_operand execute(
         q_jal, q_jalr:      result = { 1'b0, pc } + 4;
         q_branch:           result = { 1'b0, operand1[`word_size-1:0] } - { 1'b0, operand2[`word_size-1:0] };
         q_load, q_store, q_amo:    result = operand1 + operand2;
+        // The CSR read value is muxed in by the execute stage, which owns the
+        // CSR file; nothing useful to compute here.
+        q_system, q_misc_mem:  result = 0;
         q_op, q_op_imm: begin
             case (f3)
                 f3_addsub:
@@ -350,16 +426,13 @@ function automatic ext_operand execute(
                 f3_xor:     result = operand1 ^ operand2;
                 f3_or:      result = operand1 | operand2;
                 f3_and:     result = operand1 & operand2;
-                default: begin
-                            $display("Unimplemnted f3: %x", f3);
-                            result = 0;
-                end
+                default: result = 0;   // unreachable: f3 is fully decoded above
             endcase
         end
-        default: begin
-            $display("Should never get here: pc=%x op=%b", pc, op_q);
-            result = 0;
-        end
+        // q_unknown lands here. It is no longer a "cannot happen" case: the
+        // execute stage raises an illegal-instruction trap for it, so this
+        // just needs to produce something harmless.
+        default: result = 0;
     endcase
     //if (op_q == q_op_imm32 && f3 == f3_addsub)
     //    $display("%d: %x %x result32: %x result: %x", f7_mod(f7),

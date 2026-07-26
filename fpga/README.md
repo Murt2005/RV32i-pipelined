@@ -4,9 +4,11 @@ The five-stage RV32I core from this repo, running on the pico2-ice's
 iCE40UP5K. Programs are loaded over USB at run time; one bitstream runs any
 program the normal build flow produces.
 
-Status: on hardware, all 19 tests under `tests/` pass with output byte-identical
-to the Icarus simulation, all 40 official `rv32ui` riscv-tests pass, and 600
-random programs match a reference model instruction for instruction.
+Status: on hardware, all 21 tests under `tests/` pass with output byte-identical
+to the Icarus simulation, all 40 official `rv32ui` riscv-tests pass, and random
+programs match a reference model instruction for instruction — with the
+pipeline stalled pseudo-randomly as well as free-running. The core implements
+RV32I plus machine-mode CSRs and precise traps.
 
 ```
 Host PC ──USB──► RP2350 ──► iCE40UP5K
@@ -38,6 +40,8 @@ python3 host/rv32_host.py --elf build/tests/isa/add_sub.elf
 python3 host/rv32_host.py --regress       # all tests, diffed against simulation
 python3 host/rv32_host.py --riscv-tests   # official rv32ui suite (make riscv-tests first)
 python3 host/rv32_diff.py --iters 200     # random programs vs the reference model
+python3 host/rv32_diff.py --stall-rate 200   # ... with the pipeline stalled most cycles
+python3 host/rv32_host.py --bench build/tests/bench/ipc.elf   # measure IPC
 ```
 
 After the first firmware flash you never need BOOTSEL again: opening the CDC
@@ -91,8 +95,45 @@ UART ends therefore derive from the same crystal and cannot drift.
 `firmware/main.c`. The baud divisor is a synthesis-time constant, so a mismatch
 garbles bytes rather than producing silence.
 
-**Utilisation** (`nextpnr --up5k --package sg48`): 3321/5280 LC (62%),
-5/30 BRAM, 4/4 SPRAM, 8.46 MHz vs a 6 MHz constraint.
+**Utilisation** (`nextpnr --up5k --package sg48`): 4854/5280 LC (91%),
+6/30 BRAM, 4/4 SPRAM, 7.6 MHz vs a 6 MHz constraint.
+
+## Performance
+
+Two counters are readable as memory-mapped words while the core runs, zeroed
+each time it is released:
+
+| Address | Meaning |
+|---|---|
+| `0x0002FFF0` | cycles elapsed |
+| `0x0002FFF4` | instructions committed |
+
+`tests/bench/ipc.s` runs a deliberately mixed workload — ALU, a load-use pair, a
+taken branch and a store — and stores both counters where the host can read them:
+
+```
+                    no BTB      with BTB
+cycles              32017        24022
+retired             20012        20012
+IPC                 0.625        0.833
+at 6 MHz          3.75 MIPS    5.00 MIPS
+```
+
+The gap was almost entirely taken branches — each one cost a redirect and a
+decode flush. `core` now has a 16-entry direct-mapped branch target buffer
+behind its `btb_enable` parameter (`btb_entries` sets the size), worth 33% on
+this workload.
+
+It is a pure hint: execute already compares the resolved next PC against what
+fetch actually fetched and redirects on any mismatch, so a wrong prediction
+costs exactly what having no predictor costs. Only the low 14 bits of the
+target are stored and the branch's own upper bits are reused, so a target in a
+different 64K region mispredicts rather than being stored wrongly — that is
+what keeps the table affordable.
+
+**It is not free in area**: 4246 → 4854 LC (80% → 91%), and fMax drops 8.0 →
+7.6 MHz. That is inside the ≤93% the board can reliably place, but not by much;
+drop `btb_entries` to 8, or set `btb_enable = 0`, to get the area back.
 
 ## Wire protocol
 
@@ -102,18 +143,28 @@ idle state so idle filler is harmless.
 | Cmd | | Response |
 |---|---|---|
 | `P` 0x50 | ping | `p` 0x70, version |
-| `Z` 0x5A | zero both memories | `z` 0x7A |
+| `Z` 0x5A | zero both memories and the register file | `z` 0x7A |
 | `W` 0x57 | write: `addr[4] len[2] data[len]` | `w` 0x77 |
 | `R` 0x52 | read: `addr[4] len[2]` | `r` 0x72, then `len` bytes |
 | `G` 0x47 | go | `g` 0x67, then program output until `0x04` (EOT) |
 | `H` 0x48 | halt | `h` 0x68 |
 | `S` 0x53 | status | `s` 0x73, `{5'b0, uart_err, halted, running}` |
+| `T` 0x54 | stall injection rate: `rate[1]` | `t` 0x74 |
+| `B` 0x42 | build id | `b` 0x62, then 4 bytes LE |
 
 Program output is raw bytes between the `g` and the EOT sentinel; the test
 programs emit ASCII only, so `0x04` is unambiguous.
 
 The version byte is checked by the host, so a stale bitstream paired with a
 newer host fails immediately and explicitly instead of misbehaving.
+
+The version only tracks the *wire protocol*, though, so a bitstream built from
+older **core** RTL still answers a ping perfectly happily — which cost one
+debugging session chasing a hardware bug that was really a missing reflash. The
+`B` command reports a hash of the RTL the bitstream was built from
+(`fpga/ice40/rtl-sources.txt` lists the files, and both the Makefile and
+`rv32_host.py` hash exactly that list), and the host warns when it differs from
+the working tree.
 
 ## LEDs
 
@@ -197,9 +248,21 @@ only uses operands in -2..1, where the subtraction can never overflow, so the
 official suite passes with the bug present. `tests/isa/branch_signed.s` now
 covers it directly.
 
-**Hardware and simulation must start from the same memory.** `memory.sv` zeroes
-its arrays in an `initial` block, so every simulated run begins with all-zero
-memory. SPRAM keeps its contents across runs. `hazards/branch_after_load`
+**Stall injection.** `stall` is otherwise only ever driven by transmit-queue
+backpressure, which is tied to how often the program prints and so barely
+exercises the stall/redirect interaction — precisely where the fetch bug above
+was hiding. The `T` command drives it from an LFSR instead, reseeded on every
+`G` so a failing case replays identically. Extra stall cycles are always safe:
+the queue-backpressure term is what guarantees no byte is dropped, and stalling
+more never breaks it.
+
+**Hardware and simulation must start from the same state.** `memory.sv` and the
+register file are both zeroed by `initial` blocks, so every simulated run begins
+clean. SPRAM and the block-RAM register file both keep their contents across
+runs, so `Z` clears both. Note the register file's write port has to stay a
+*single* muxed site: writing the array from two separate conditions infers a
+second write port, which a 1W1R block RAM cannot provide, and the design stops
+fitting. `hazards/branch_after_load`
 asserts that a location its own program never writes is still zero — it passed
 in simulation and failed on hardware purely because of the previous test's
 leftovers. Hence the `Z` command, which clears both memories in 16384 cycles

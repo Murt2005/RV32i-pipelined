@@ -35,12 +35,19 @@
 //   'G' 0x47    go          -> 'g', then raw program output until 0x04 (EOT)
 //   'H' 0x48    halt        -> 'h'
 //   'S' 0x53    status      -> 's', {6'b0, halted, running}
+//   'T' 0x54    stall rate  -> rate[1], then 't'  (0 disables; see below)
+//   'B' 0x42    build id    -> 'b', 4 bytes LE identifying the RTL that was built
 // ---------------------------------------------------------------------------
 
 module rv32_top #(
     parameter int CLK_FREQ  = 6000000,      // must equal the firmware's ice_fpga_init()
     parameter int BAUD_RATE = 500000,       // exact /12 of 6 MHz -> zero baud error
-    parameter [31:0] RESET_PC = 32'h0001_0000
+    parameter [31:0] RESET_PC = 32'h0001_0000,
+    // Hash of the RTL sources, set by the Makefile. The protocol VERSION only
+    // tracks the wire protocol, so a bitstream built from older core RTL still
+    // answers a ping happily -- which already cost one debugging session
+    // chasing a "hardware bug" that was really a stale bitstream.
+    parameter [31:0] BUILD_ID = 32'h0000_0000
 ) (
     input  logic clk,          // pin 35, G0 global buffer, from RP2350 GPOUT0
     input  logic reset_n,      // pin 10, ICE_PB push button, active low
@@ -53,10 +60,14 @@ module rv32_top #(
 
     localparam int CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;
 
-    localparam [7:0] VERSION      = 8'h03;
+    localparam [7:0] VERSION      = 8'h05;
     localparam [7:0] EOT          = 8'h04;
     localparam [31:0] MMIO_PUTCHAR = 32'h0002_FFF8;
     localparam [31:0] MMIO_HALT    = 32'h0002_FFFC;
+    localparam [31:0] MMIO_CYCLES  = 32'h0002_FFF0;
+    // riscv-tests `p` environment reports results here and then spins.
+    localparam [31:0] MMIO_TOHOST  = 32'h0002_FFC0;
+    localparam [31:0] MMIO_RETIRED = 32'h0002_FFF4;
 
     // -----------------------------------------------------------------------
     // Power-on reset. Do this first; it is not optional on this board.
@@ -150,25 +161,96 @@ module rv32_top #(
     logic cpu_reset;
     logic cpu_stall;
 
+    // Stall injection. `stall` is otherwise only ever driven by transmit-queue
+    // backpressure, which is a low-entropy pattern tied to how often the
+    // program prints -- so the stall/redirect interaction in the pipeline
+    // barely gets exercised, and that is precisely where a latent fetch bug was
+    // already found. Driving it from an LFSR instead lets the differential
+    // tester hammer that interaction.
+    logic [7:0]  stall_rate;       // 0 disables; higher stalls more often
+    logic [15:0] lfsr;
+
+    // Memory + register clear. SPRAM and the block-RAM register file both keep
+    // their contents across runs, while the simulator's memory.sv and register
+    // file are zeroed by `initial` blocks. Without this the two do not start
+    // from the same state, and a test that asserts a location the program never
+    // writes passes in simulation and fails on hardware for a reason that has
+    // nothing to do with the pipeline.
+    logic        zeroing;
+
     assign cpu_reset = rst | ~cpu_run;
 
     memory_io_req cpu_inst_req, cpu_data_req;
-    memory_io_rsp inst_rsp,     data_rsp;
+    memory_io_rsp inst_rsp,     data_rsp, data_rsp_raw;
+    logic         retired;
+
+    // Performance counters, readable as memory-mapped words. Counted only while
+    // the core is running, so a figure is not diluted by time spent stopped.
+    logic [31:0] perf_cycles, perf_retired;
+    logic [31:0] perf_cycles_q, perf_retired_q;
+    logic        perf_sel_cycles, perf_sel_retired;
+    logic        perf_sel_cycles_q, perf_sel_retired_q;
 
     core the_core (
         .clk(clk),
         .reset(cpu_reset),
         .stall(cpu_stall),
+        // 'Z' means "restore the state a fresh simulation would start from",
+        // which is memory *and* registers. The clear takes 32 cycles and the
+        // memory pass takes 16384, so it is always finished first.
+        .clear_regs(zeroing),
         .reset_pc(RESET_PC),
         .inst_mem_req(cpu_inst_req),
         .inst_mem_rsp(inst_rsp),
         .data_mem_req(cpu_data_req),
-        .data_mem_rsp(data_rsp)
+        .data_mem_rsp(data_rsp),
+        .retired(retired)
     );
 
-    // Leave one free slot so the push that happens on the cycle the stall
-    // clears can never overflow.
-    assign cpu_stall = (txq_count >= TXQ_STALL_LVL);
+    assign perf_sel_cycles  = cpu_data_req.valid & (cpu_data_req.addr == MMIO_CYCLES)
+                            & is_any_byte(cpu_data_req.do_read);
+    assign perf_sel_retired = cpu_data_req.valid & (cpu_data_req.addr == MMIO_RETIRED)
+                            & is_any_byte(cpu_data_req.do_read);
+
+    always_ff @(posedge clk) begin
+        if (rst || !cpu_run) begin
+            perf_cycles  <= 32'd0;
+            perf_retired <= 32'd0;
+        end else begin
+            perf_cycles <= perf_cycles + 32'd1;
+            if (retired) perf_retired <= perf_retired + 32'd1;
+        end
+        perf_sel_cycles_q  <= perf_sel_cycles;
+        perf_sel_retired_q <= perf_sel_retired;
+        perf_cycles_q      <= perf_cycles;
+        perf_retired_q     <= perf_retired;
+    end
+
+    // Muxed over the memory's own response, one cycle later to match its latency.
+    always_comb begin
+        data_rsp = data_rsp_raw;
+        if (perf_sel_cycles_q)       data_rsp.data = perf_cycles_q;
+        else if (perf_sel_retired_q) data_rsp.data = perf_retired_q;
+    end
+
+    // Free-running Galois LFSR, reseeded on every 'G' so that a given program
+    // at a given rate replays identically -- shrinking a failing case depends
+    // on that.
+    always_ff @(posedge clk) begin
+        if (rst || !cpu_run)
+            lfsr <= 16'hACE1;
+        else
+            lfsr <= lfsr[0] ? ((lfsr >> 1) ^ 16'hB400) : (lfsr >> 1);
+    end
+
+    logic stall_inject;
+    // rate 0 never fires; rate 255 still leaves lfsr[7:0] == 255 un-stalled, so
+    // the core always makes forward progress and cannot be wedged.
+    assign stall_inject = (lfsr[7:0] < stall_rate);
+
+    // Extra stall cycles are always safe: the queue-backpressure term below is
+    // what guarantees no byte is dropped, and stalling *more* never breaks it.
+    assign cpu_stall = (txq_count >= TXQ_STALL_LVL) | stall_inject;
 
     // -----------------------------------------------------------------------
     // MMIO decode (snoops the data request, exactly like the simulation top)
@@ -180,7 +262,8 @@ module rv32_top #(
                         & is_any_byte(cpu_data_req.do_write);
 
     assign mmio_halt    = cpu_run & cpu_data_req.valid
-                        & (cpu_data_req.addr == MMIO_HALT)
+                        & ((cpu_data_req.addr == MMIO_HALT)
+                        |  (cpu_data_req.addr == MMIO_TOHOST))
                         & is_any_byte(cpu_data_req.do_write);
 
     // -----------------------------------------------------------------------
@@ -197,7 +280,10 @@ module rv32_top #(
         S_RD_ACK = 4'd7,    // emit 'r' before the payload so the host can sync
         S_RD_REQ = 4'd8,    // issue the word read
         S_RD_WAIT= 4'd9,    // memory response lands the next cycle
-        S_RD_PUSH= 4'd10    // hand one byte to the transmit queue
+        S_RD_PUSH= 4'd10,   // hand one byte to the transmit queue
+        S_TRATE  = 4'd11,   // collect the stall-injection rate byte
+        S_BID_ACK= 4'd12,   // emit 'b'
+        S_BID    = 4'd13    // then the four build-id bytes
     } ldr_state_t;
 
     ldr_state_t   state;
@@ -208,13 +294,7 @@ module rv32_top #(
     logic         resp_two;
     logic         halt_pending;
     logic [7:0]   rx_err_count;
-    // Memory clear. SPRAM keeps its contents across runs, while the simulator's
-    // memory.sv zeroes its arrays in an `initial` block. Without this the two
-    // do not start from the same state, and a test that asserts a location the
-    // program never writes (e.g. "the wrong-path store must not have
-    // committed") passes in simulation and fails on hardware for a reason that
-    // has nothing to do with the pipeline.
-    logic         zeroing;
+    logic [1:0]   bid_idx;
     logic [13:0]  zero_addr;
 
     // Memory read-back. Needed to compare architectural state against a
@@ -223,6 +303,7 @@ module rv32_top #(
     logic         rd_from_inst;
     logic [31:0]  rd_word;
     logic         rd_ready;
+
 
     // Loader-issued memory write, pulsed for a single cycle.
     memory_io_req ldr_req;
@@ -252,6 +333,14 @@ module rv32_top #(
             txq_push   = 1'b1;
             txq_din    = (state == S_RESP1) ? resp0 : resp1;
             resp_ready = 1'b1;
+        end else if (!txq_full && state == S_BID_ACK) begin
+            txq_push = 1'b1;
+            txq_din  = 8'h62;                       // 'b'
+            rd_ready = 1'b1;
+        end else if (!txq_full && state == S_BID) begin
+            txq_push = 1'b1;
+            txq_din  = BUILD_ID[{bid_idx, 3'b000} +: 8];
+            rd_ready = 1'b1;
         end else if (!txq_full && state == S_RD_ACK) begin
             txq_push = 1'b1;
             txq_din  = 8'h72;                       // 'r', ahead of the payload
@@ -282,6 +371,8 @@ module rv32_top #(
             cmd_is_read   <= 1'b0;
             rd_from_inst  <= 1'b0;
             rd_word       <= 32'd0;
+            stall_rate    <= 8'd0;
+            bid_idx       <= 2'd0;
             ldr_req       <= memory_io_no_req;
         end else begin
             ldr_req.valid <= 1'b0;      // single-cycle pulse
@@ -319,6 +410,13 @@ module rv32_top #(
                             8'h52: begin                 // 'R' read
                                 cmd_is_read <= 1'b1;
                                 byte_idx <= 2'd0; state <= S_ADDR;
+                            end
+                            8'h54: begin                 // 'T' stall rate
+                                state <= S_TRATE;
+                            end
+                            8'h42: begin                 // 'B' build id
+                                bid_idx <= 2'd0;
+                                state   <= S_BID_ACK;
                             end
                             8'h47: begin                 // 'G' go
                                 cpu_run    <= 1'b1;
@@ -445,6 +543,25 @@ module rv32_top #(
                     end
                 end
 
+                S_BID_ACK: begin
+                    if (rd_ready) state <= S_BID;
+                end
+
+                S_BID: begin
+                    if (rd_ready) begin
+                        bid_idx <= bid_idx + 2'd1;
+                        if (bid_idx == 2'd3) state <= S_IDLE;
+                    end
+                end
+
+                S_TRATE: begin
+                    if (rx_valid) begin
+                        stall_rate <= rx_data;
+                        resp0 <= 8'h74; resp_two <= 1'b0;   // 't'
+                        state <= S_RESP1;
+                    end
+                end
+
                 S_RESP1: begin
                     if (resp_ready) begin
                         if (resp_two) state <= S_RESP2;
@@ -498,7 +615,7 @@ module rv32_top #(
     );
 
     memory_spram #(.enable_rsp_addr(1)) data_mem (
-        .clk(clk), .reset(rst), .req(data_req_mux), .rsp(data_rsp)
+        .clk(clk), .reset(rst), .req(data_req_mux), .rsp(data_rsp_raw)
     );
 
     // -----------------------------------------------------------------------

@@ -185,7 +185,7 @@ module tb_rv32_top();
         send_byte(8'h00);                        // NOP, must be ignored
         send_byte(8'h50);                        // 'P'
         expect_byte(8'h70, "ping reply");
-        expect_byte(8'h03, "version");
+        expect_byte(8'h05, "version");
         $display("PING ok");
 
         send_byte(8'h5A);                        // 'Z' zero both memories
@@ -212,6 +212,12 @@ module tb_rv32_top();
             end
         end
         $display("READBACK ok");
+
+        // Exercise the stall-injection knob: stall roughly a third of cycles
+        // for the whole run. Output must be identical, just slower.
+        send_byte(8'h54); send_byte(8'd85);      // 'T', rate
+        expect_byte(8'h74, "stall rate ack");
+        $display("STALLRATE ok");
 
         send_byte(8'h47);                        // 'G'
         expect_byte(8'h67, "go reply");

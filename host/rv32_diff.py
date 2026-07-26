@@ -2,10 +2,17 @@
 """
 Differential test: random RV32I programs, hardware vs reference model.
 
-For each iteration it generates a random straight-line-plus-forward-branches
-program, runs it on the FPGA and on rv32_model.py, then compares the full
-architectural state -- all 30 general registers plus the scratch memory the
-program was allowed to touch -- read back over the loader's 'R' command.
+For each iteration it generates a random program -- ALU ops, loads and stores,
+forward branches, JAL, register-indirect JALR and counted loops with backward
+branches -- runs it on the FPGA and on rv32_model.py, then compares the full
+architectural state: all 30 general registers plus the scratch memory the
+program was allowed to touch, read back over the loader's 'R' command.
+
+Termination is structural, not hoped for: forward-only branches make progress
+monotonic, the loop counter lives in a reserved register and is masked to 0..7
+every iteration so even a branch landing past its initialisation exits within
+eight passes, and JALR targets are absolute offsets from a reserved base
+register so they cannot escape the program.
 
 Why this finds things the directed tests cannot: the hand-written tests and
 even riscv-tests exercise instructions in patterns a human chose. The bugs left
@@ -27,11 +34,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rv32_model import Rv32Model                                # noqa: E402
 from rv32_host import (open_board, Rv32Error, TEXT_BASE,        # noqa: E402
-                       DATA_BASE)
+                       DATA_BASE, check_build_id)
 
 # x31 is reserved as the scratch-memory base pointer and is never written by
 # generated code, so every load and store is guaranteed to land in bounds.
+# x30 is reserved as the loop counter, so a backward branch always terminates.
+# x29 holds the body's base address, so a JALR target is always a real
+# instruction address. Deriving it from a preceding auipc instead would be
+# nicer -- it puts an EX->EX bypass straight into the jump -- but an earlier
+# forward branch can land on the jalr itself, skipping the auipc and leaving a
+# garbage base that jumps out of memory.
 BASE_REG = 31
+LOOP_REG = 30
+CODE_REG = 29
+TEXT_BASE_ADDR = 0x00010000
 
 SCRATCH_BASE = 0x00021000
 SCRATCH_SIZE = 256
@@ -76,6 +92,14 @@ def j_type(imm, rd, op):
         | (rd << 7) | op
 
 
+def li2(rd, value):
+    """Always a lui/addi pair, so its length is known before the value is."""
+    value &= 0xFFFFFFFF
+    upper = (value + 0x800) & 0xFFFFF000
+    lower = value - upper
+    return [u_type(upper, rd, 0x37), i_type(lower & 0xFFF, rd, 0, rd, 0x13)]
+
+
 def li(rd, value):
     """lui/addi pair loading an arbitrary 32-bit constant."""
     value &= 0xFFFFFFFF
@@ -107,59 +131,103 @@ STORE_F3 = [("sb", 0, 1), ("sh", 1, 2), ("sw", 2, 4)]
 
 def gen_program(rng, body_len):
     """Returns (list of instruction words, initial register values)."""
-    # Registers a generated instruction may write: anything but the scratch
-    # base. x0 is included on purpose -- writes to it must be discarded.
-    wr_regs = [r for r in range(0, 31)]
-    rd_regs = list(range(0, 31))
+    # Registers a generated instruction may write: anything but the reserved
+    # two. x0 is included on purpose -- writes to it must be discarded.
+    wr_regs = list(range(0, CODE_REG))
+    rd_regs = list(range(0, 32))
 
-    init = {r: rng.getrandbits(32) for r in range(1, 31)}
+    init = {r: rng.getrandbits(32) for r in range(1, CODE_REG)}
 
     prologue = []
-    for r in range(1, 31):
+    for r in range(1, CODE_REG):
         prologue += li(r, init[r])
-    prologue += li(BASE_REG, SCRATCH_BASE)
+    prologue += li(LOOP_REG, 0)
+    prologue += li2(BASE_REG, SCRATCH_BASE)
+    # Reserve the two words li2 will take, so the address is self-consistent.
+    body_base = TEXT_BASE_ADDR + (len(prologue) + 2) * 4
+    prologue += li2(CODE_REG, body_base)
 
     body = []
-    for idx in range(body_len):
+
+    def simple(rng):
+        """One instruction with no control flow, for use inside a loop body."""
+        kind = rng.choices(["op", "opimm", "shift", "lui", "auipc", "load", "store"],
+                           weights=[30, 20, 12, 6, 6, 13, 13])[0]
+        rd = rng.choice(wr_regs)
+        rs1 = rng.choice(rd_regs)
+        rs2 = rng.choice(rd_regs)
+        if kind == "op":
+            _, f3, f7 = rng.choice(OP_F3F7)
+            return r_type(f7, rs2, rs1, f3, rd, 0x33)
+        if kind == "opimm":
+            _, f3 = rng.choice(OPIMM_F3)
+            return i_type(rng.randrange(-2048, 2048), rs1, f3, rd, 0x13)
+        if kind == "shift":
+            shamt = rng.randrange(0, 32)
+            f3, f7 = rng.choice([(1, 0x00), (5, 0x00), (5, 0x20)])
+            return i_type((f7 << 5) | shamt, rs1, f3, rd, 0x13)
+        if kind == "lui":
+            return u_type(rng.getrandbits(20) << 12, rd, 0x37)
+        if kind == "auipc":
+            return u_type(rng.getrandbits(20) << 12, rd, 0x17)
+        if kind == "load":
+            _, f3, width = rng.choice(LOAD_F3)
+            off = rng.randrange(0, SCRATCH_SIZE // width) * width
+            return i_type(off, BASE_REG, f3, rd, 0x03)
+        _, f3, width = rng.choice(STORE_F3)
+        off = rng.randrange(0, SCRATCH_SIZE // width) * width
+        return s_type(off, rs2, BASE_REG, f3, 0x23)
+
+    while len(body) < body_len:
+        idx = len(body)
         kind = rng.choices(
-            ["op", "opimm", "shift", "lui", "auipc", "load", "store", "branch", "jal"],
-            weights=[26, 18, 10, 5, 5, 12, 12, 10, 2])[0]
+            ["simple", "branch", "jal", "jalr", "loop"],
+            weights=[62, 14, 4, 8, 12])[0]
         rd = rng.choice(wr_regs)
         rs1 = rng.choice(rd_regs)
         rs2 = rng.choice(rd_regs)
 
-        if kind == "op":
-            _, f3, f7 = rng.choice(OP_F3F7)
-            body.append(r_type(f7, rs2, rs1, f3, rd, 0x33))
-        elif kind == "opimm":
-            _, f3 = rng.choice(OPIMM_F3)
-            body.append(i_type(rng.randrange(-2048, 2048), rs1, f3, rd, 0x13))
-        elif kind == "shift":
-            shamt = rng.randrange(0, 32)
-            f3, f7 = rng.choice([(1, 0x00), (5, 0x00), (5, 0x20)])
-            body.append(i_type((f7 << 5) | shamt, rs1, f3, rd, 0x13))
-        elif kind == "lui":
-            body.append(u_type(rng.getrandbits(20) << 12, rd, 0x37))
-        elif kind == "auipc":
-            body.append(u_type(rng.getrandbits(20) << 12, rd, 0x17))
-        elif kind == "load":
-            _, f3, width = rng.choice(LOAD_F3)
-            off = rng.randrange(0, SCRATCH_SIZE // width) * width
-            body.append(i_type(off, BASE_REG, f3, rd, 0x03))
-        elif kind == "store":
-            _, f3, width = rng.choice(STORE_F3)
-            off = rng.randrange(0, SCRATCH_SIZE // width) * width
-            body.append(s_type(off, rs2, BASE_REG, f3, 0x23))
+        if kind == "simple":
+            body.append(simple(rng))
         elif kind == "branch":
             # Forward only, so the program always terminates.
             _, f3 = rng.choice(BRANCH_F3)
             skip = rng.randrange(1, 9)
             target = min(idx + 1 + skip, body_len)
             body.append(b_type((target - idx) * 4, rs2, rs1, f3, 0x63))
-        else:  # jal, forward only
+        elif kind == "jal":
             skip = rng.randrange(1, 5)
             target = min(idx + 1 + skip, body_len)
             body.append(j_type((target - idx) * 4, rd, 0x6F))
+        elif kind == "jalr":
+            skip = rng.randrange(1, 6)
+            # Forward, and within reach of a 12-bit offset from CODE_REG.
+            target = max(idx + 1, min(idx + 1 + skip, body_len, 511))
+            off = target * 4
+            # One time in four make the offset odd. The spec requires JALR to
+            # clear bit 0 of the target, so off|1 still lands on the same
+            # aligned instruction -- but only on a core that does the masking.
+            if rng.random() < 0.25:
+                off |= 1
+            body.append(i_type(off, CODE_REG, 0, rd, 0x67))   # jalr rd, code, off
+        else:
+            # Counted loop with a backward branch. LOOP_REG is never written by
+            # generated code, so the trip count cannot be corrupted and the
+            # loop always terminates.
+            trips = rng.randrange(2, 6)
+            inner = rng.randrange(1, 5)
+            body.append(i_type(trips, 0, 0, LOOP_REG, 0x13))   # li loop, trips
+            top = len(body)
+            for _ in range(inner):
+                body.append(simple(rng))
+            body.append(i_type(-1, LOOP_REG, 0, LOOP_REG, 0x13))  # addi loop,-1
+            # Mask the counter into 0..7 every iteration. A forward branch from
+            # earlier code can land inside this loop, past the initialisation,
+            # leaving an arbitrary 32-bit value in the counter; without the mask
+            # that would run for billions of iterations.
+            body.append(i_type(7, LOOP_REG, 7, LOOP_REG, 0x13))   # andi loop,7
+            back = len(body)
+            body.append(b_type((top - back) * 4, 0, LOOP_REG, 1, 0x63))  # bne
 
     # Dump x1..x30 before anything can clobber them, then stop.
     epilogue = []
@@ -228,16 +296,29 @@ def main():
     ap.add_argument("--length", type=int, default=120,
                     help="instructions in the random body")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--stall-rate", type=int, default=0,
+                    help="drive the core's stall input from an LFSR this often "
+                         "out of 256 (0 = only transmit-queue backpressure)")
     ap.add_argument("--save-failure", default="build/diff-failure.bin")
     args = ap.parse_args()
 
     seed = args.seed if args.seed is not None else random.randrange(1 << 30)
-    print(f"seed {seed}, {args.iters} programs of {args.length} instructions")
+    print(f"seed {seed}, {args.iters} programs of {args.length} instructions, "
+          f"stall rate {args.stall_rate}/256")
 
     try:
         board = open_board(args.port)
     except Rv32Error as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    check_build_id(board, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+    try:
+        board.set_stall_rate(args.stall_rate)
+    except Rv32Error as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        board.close()
         return 2
 
     failures = 0
