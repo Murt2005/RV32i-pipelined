@@ -1,6 +1,10 @@
 #include <verilated.h>          // Defines common routines
 #include <iostream>             // Need std::cout
+#include <cstdlib>
 #include "Vtop.h"               // From Verilating "top.v"
+#if VM_COVERAGE
+# include <verilated_cov.h>
+#endif
 
 Vtop *top;                      // Instantiation of module
 
@@ -21,6 +25,11 @@ int main(int argc, char** argv) {
 
     top->reset = 1;           // Set some inputs
 
+    // Watchdog, so a program that never halts cannot hang a coverage sweep.
+    vluint64_t max_time = 2000000;
+    if (const char *env = std::getenv("RV32_MAX_CYCLES"))
+        max_time = std::strtoull(env, nullptr, 10);
+
     while (!Verilated::gotFinish()) {
         if (main_time > 10)
             top->reset = 0;   // Deassert reset
@@ -30,10 +39,20 @@ int main(int argc, char** argv) {
         top->eval();
         if (top->halt == 1)
             break;
+        if (main_time > max_time) {
+            std::cout << "TIMEOUT" << std::endl;
+            break;
+        }
         main_time++;            // Time passes...
     }
 
     top->final();               // Done simulating
+
+#if VM_COVERAGE
+    // One file per run; the Makefile merges them with verilator_coverage.
+    const char *cov = std::getenv("RV32_COVERAGE_FILE");
+    Verilated::threadContextp()->coveragep()->write(cov ? cov : "coverage.dat");
+#endif
     //    // (Though this example doesn't get here)
     delete top;
 }

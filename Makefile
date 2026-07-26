@@ -137,3 +137,39 @@ run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 	done; \
 	echo ""; echo "$$pass passed, $$fail failed, `echo $(RVTESTS) | wc -w | tr -d ' '` total"; \
 	[ $$fail -eq 0 ]
+
+# --------------------------------------------------------------------
+# Line/toggle coverage over both suites, via Verilator.
+# --------------------------------------------------------------------
+.PHONY: coverage
+
+build/cov/Vtop: top.sv cpu.sv memory.sv memory_io.sv riscv.sv riscv32_common.sv \
+                base.sv system.sv verilator_top.cpp
+	mkdir -p build/cov
+	$(VERILATOR) -O0 --cc --build --top-module top --coverage \
+		--Mdir build/cov -Wno-fatal top.sv verilator_top.cpp --exe \
+		-o Vtop
+
+coverage: build/cov/Vtop $(TOOLS) riscv-tests
+	@rm -rf build/cov/dat; mkdir -p build/cov/dat
+	@set -e; n=0; \
+	for t in $(TESTS_STEMS); do \
+		$(MAKE) -s build/tests/$$t.elf >/dev/null; \
+		/bin/bash ./elftohex.sh build/tests/$$t.elf . >/dev/null 2>&1; \
+		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`.dat \
+			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
+	done; \
+	for t in $(RVTESTS); do \
+		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
+		RV32_COVERAGE_FILE=build/cov/dat/rv32ui-$$t.dat \
+			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
+	done; \
+	echo "ran $$n programs"
+	@verilator_coverage --write build/cov/merged.dat build/cov/dat/*.dat >/dev/null
+	@verilator_coverage --annotate build/cov/annotated --annotate-min 1 \
+		build/cov/merged.dat 2>&1 | tail -20
+	@echo ""
+	@echo "uncovered points (marked %000000 in build/cov/annotated/):"
+	@grep -rc "^%000000" build/cov/annotated/ 2>/dev/null | grep -v ":0$$" || \
+		echo "  none"
+

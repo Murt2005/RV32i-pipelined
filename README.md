@@ -73,6 +73,7 @@ Against real hardware (see `fpga/README.md`), `host/rv32_diff.py` additionally r
 | `make run-tests-iverilog` | Run all tests under `tests/isa/` and `tests/hazards/`. |
 | `make riscv-tests` | Build the official riscv-tests `rv32ui` suite into `build/riscv-tests/`. |
 | `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus. |
+| `make coverage` | Verilator line/toggle coverage over both suites; annotated output in `build/cov/annotated/`. |
 | `make clean` | Remove build artifacts, `*.hex`, `test`, sim binaries, `test.vcd`, `obj_dir/`. |
 
 **Note**: `result-iverilog` and `result-verilator` depend on `test`; ensure `test.c` and `start.s` are built and `elftohex.sh` has been run so `code*.hex` and `data*.hex` exist before simulating.
