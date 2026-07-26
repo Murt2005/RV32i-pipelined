@@ -18,9 +18,55 @@ all wired up.
 cd formal && sby -f smoke.sby      # expect FAIL with a counterexample trace
 ```
 
-## Status: riscv-formal is not wired up yet
+## riscv-formal
 
-The blocker is instrumentation, not tooling. riscv-formal drives its checks off
+```bash
+brew install yices2                # solver
+git clone https://github.com/YosysHQ/sby /tmp/sby
+cd /tmp/sby && make install PREFIX=$HOME/.local
+export PATH=$HOME/.local/bin:$PATH
+
+cd formal
+make checks                        # generate the .sby files
+make list                          # what was generated
+make one CHECK=insn_addi_ch0       # a single check
+make run-insn                      # all 37 instruction checks
+make run                           # everything, including the slow ones
+```
+
+Each `insn_*` check is a bounded proof that one instruction is implemented
+correctly for **every** operand value and **every** reachable pipeline state,
+rather than the handful a directed test happens to pick. That is the thing
+neither riscv-tests nor the random differential tester can give you.
+
+### How it is wired
+
+`yosys` cannot read this project's SystemVerilog, so `formal/Makefile` runs
+`sv2v` over `wrapper.sv` + `cpu.sv` first and points riscv-formal at the
+flattened result. `genchecks.py` derives its base directory from the working
+directory and expects a `<basedir>/cores/<core>/` layout, so the Makefile
+builds that layout in `formal/rf/` out of symlinks into the vendored
+riscv-formal rather than copying it.
+
+The RVFI port itself lives in `cpu.sv` behind `` `ifdef RVFI ``, so the
+synthesised build carries none of it. It is validated independently by
+`host/rvfi_check.py`, which replays every retired instruction through the
+reference model — worth doing first, because riscv-formal reasons entirely
+about what RVFI reports, and a wrong record yields confident nonsense in both
+directions.
+
+### The memory model
+
+`wrapper.sv` leaves the memory *data* free — that is the point, the solver
+picks whatever instruction stream exposes a violation. The *protocol* is
+constrained to match the real memories: a request presented in one cycle is
+answered the next, with the response echoing the address it was issued for.
+Without that the core would be judged against a memory no implementation has,
+and the pc-chain checks would fail on the environment rather than the design.
+
+## Appendix: what RVFI needed
+
+The instrumentation that had to be added. riscv-formal drives its checks off
 an [RVFI](https://github.com/YosysHQ/riscv-formal/blob/main/docs/rvfi.md) port
 that reports, **at the commit point**, everything about the instruction that
 just retired. This core does not carry most of that to writeback yet.

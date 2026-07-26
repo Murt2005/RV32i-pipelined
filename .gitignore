@@ -21,4 +21,7 @@ firmware/pico-sdk
 .venv/
 __pycache__/
 
-formal/*/
+# sby work directories (one per check), not the vendored riscv-formal
+formal/smoke/
+formal/rf/
+build/formal/
