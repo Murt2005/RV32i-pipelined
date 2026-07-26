@@ -64,4 +64,30 @@ end
 // depend on which cycle the store happened to land on.
 always @(negedge clk) if (halt == 1'b1) $finish;
 
+`ifdef RVFI
+// Dump the commit record so it can be cross-checked against the reference
+// model in host/rv32_model.py. Hierarchical rather than ported through top.sv,
+// to keep the RVFI instrumentation out of the synthesised path entirely.
+always @(negedge clk) begin
+    if (!reset && the_top.the_core.rvfi_valid)
+        $display("RVFI %0d %08x %08x %08x %0d %08x %0d %08x %0d %08x %08x %1x %1x %08x %08x %0d",
+                 the_top.the_core.rvfi_order,
+                 the_top.the_core.rvfi_pc_rdata,
+                 the_top.the_core.rvfi_pc_wdata,
+                 the_top.the_core.rvfi_insn,
+                 the_top.the_core.rvfi_rs1_addr,
+                 the_top.the_core.rvfi_rs1_rdata,
+                 the_top.the_core.rvfi_rs2_addr,
+                 the_top.the_core.rvfi_rs2_rdata,
+                 the_top.the_core.rvfi_rd_addr,
+                 the_top.the_core.rvfi_rd_wdata,
+                 the_top.the_core.rvfi_mem_addr,
+                 the_top.the_core.rvfi_mem_rmask,
+                 the_top.the_core.rvfi_mem_wmask,
+                 the_top.the_core.rvfi_mem_rdata,
+                 the_top.the_core.rvfi_mem_wdata,
+                 the_top.the_core.rvfi_trap);
+end
+`endif
+
 endmodule

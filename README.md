@@ -98,6 +98,7 @@ Against real hardware (see `fpga/README.md`), `host/rv32_diff.py` additionally r
 | `make riscv-tests` | Build the official riscv-tests `rv32ui` suite into `build/riscv-tests/`. |
 | `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus (local environment). |
 | `make run-riscv-tests-p-iverilog` | Run the same tests under the suite's **stock `p` environment**. |
+| `make rvfi-check` | Cross-check the RVFI commit record against `host/rv32_model.py` for every test. |
 | `make coverage` | Verilator line/toggle coverage over both suites; annotated output in `build/cov/annotated/`. |
 | `make clean` | Remove build artifacts, `*.hex`, `test`, sim binaries, `test.vcd`, `obj_dir/`. |
 

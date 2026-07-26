@@ -478,6 +478,20 @@ module execute(
 
     output pc_control_t pc_control_out,
     output btb_update_t btb_update_out
+`ifdef RVFI
+    // Everything RVFI needs about the instruction leaving execute. Guarded
+    // because carrying it through the real pipeline registers would cost more
+    // than the UP5K has left.
+    ,output logic        rvfi_ex_valid
+    ,output logic [31:0] rvfi_ex_insn
+    ,output logic [31:0] rvfi_ex_pc
+    ,output logic [31:0] rvfi_ex_next_pc
+    ,output logic [4:0]  rvfi_ex_rs1_addr
+    ,output logic [4:0]  rvfi_ex_rs2_addr
+    ,output logic [31:0] rvfi_ex_rs1_rdata
+    ,output logic [31:0] rvfi_ex_rs2_rdata
+    ,output logic        rvfi_ex_trap
+`endif
 );
 
 import riscv::*;
@@ -726,6 +740,31 @@ always_ff @(posedge clk) begin
         btb_update_out.taken  <= (next_pc_comb != (decoded_instruction_in.pc + 4));
     end
 end
+
+`ifdef RVFI
+// Shadow of the execute stage for RVFI. Note this tracks *every* instruction
+// that leaves execute, including one that traps -- the real EX/MEM register
+// gets a bubble in that case, but RVFI still has to report the faulting
+// instruction with rvfi_trap set.
+always_ff @(posedge clk) begin
+    if (reset) begin
+        rvfi_ex_valid <= 1'b0;
+    end else begin
+        rvfi_ex_valid     <= decoded_instruction_in.is_instruction_valid
+                           & execute_control_signal_in.advance;
+        rvfi_ex_insn      <= decoded_instruction_in.instruction;
+        rvfi_ex_pc        <= decoded_instruction_in.pc;
+        rvfi_ex_next_pc   <= next_pc_comb;
+        rvfi_ex_rs1_addr  <= decoded_instruction_in.rs1;
+        rvfi_ex_rs2_addr  <= decoded_instruction_in.rs2;
+        // The *bypassed* operand values, which is what RVFI wants: the values
+        // the instruction actually computed with.
+        rvfi_ex_rs1_rdata <= bypassed_rd1_comb;
+        rvfi_ex_rs2_rdata <= bypassed_rd2_comb;
+        rvfi_ex_trap      <= trap.taken;
+    end
+end
+`endif
 
 // Sequential: pass instruction to memory stage, update CSRs and PC tracking
 always_ff @(posedge clk) begin
@@ -1052,6 +1091,29 @@ module core #(
     input  memory_io_rsp   inst_mem_rsp,
     output memory_io_req   data_mem_req,
     input  memory_io_rsp   data_mem_rsp
+`ifdef RVFI
+    ,output logic        rvfi_valid
+    ,output logic [63:0] rvfi_order
+    ,output logic [31:0] rvfi_insn
+    ,output logic        rvfi_trap
+    ,output logic        rvfi_halt
+    ,output logic        rvfi_intr
+    ,output logic [1:0]  rvfi_mode
+    ,output logic [1:0]  rvfi_ixl
+    ,output logic [4:0]  rvfi_rs1_addr
+    ,output logic [4:0]  rvfi_rs2_addr
+    ,output logic [31:0] rvfi_rs1_rdata
+    ,output logic [31:0] rvfi_rs2_rdata
+    ,output logic [4:0]  rvfi_rd_addr
+    ,output logic [31:0] rvfi_rd_wdata
+    ,output logic [31:0] rvfi_pc_rdata
+    ,output logic [31:0] rvfi_pc_wdata
+    ,output logic [31:0] rvfi_mem_addr
+    ,output logic [3:0]  rvfi_mem_rmask
+    ,output logic [3:0]  rvfi_mem_wmask
+    ,output logic [31:0] rvfi_mem_rdata
+    ,output logic [31:0] rvfi_mem_wdata
+`endif
 );
 
 import riscv::*;
@@ -1100,6 +1162,14 @@ decode_and_writeback decode_and_writeback_m(
 executed_instruction_t executed_instruction;
 pc_control_t pc_control;
 
+`ifdef RVFI
+logic        rvfi_ex_valid, rvfi_ex_trap;
+logic [31:0] rvfi_ex_insn, rvfi_ex_pc, rvfi_ex_next_pc;
+logic [4:0]  rvfi_ex_rs1_addr, rvfi_ex_rs2_addr;
+logic [31:0] rvfi_ex_rs1_rdata, rvfi_ex_rs2_rdata;
+
+`endif
+
 execute execute_m(
     .clk(clk),
     .reset(reset),
@@ -1114,6 +1184,17 @@ execute execute_m(
     .executed_instruction_out(executed_instruction),
     .pc_control_out(pc_control),
     .btb_update_out(btb_update)
+`ifdef RVFI
+    ,.rvfi_ex_valid(rvfi_ex_valid)
+    ,.rvfi_ex_insn(rvfi_ex_insn)
+    ,.rvfi_ex_pc(rvfi_ex_pc)
+    ,.rvfi_ex_next_pc(rvfi_ex_next_pc)
+    ,.rvfi_ex_rs1_addr(rvfi_ex_rs1_addr)
+    ,.rvfi_ex_rs2_addr(rvfi_ex_rs2_addr)
+    ,.rvfi_ex_rs1_rdata(rvfi_ex_rs1_rdata)
+    ,.rvfi_ex_rs2_rdata(rvfi_ex_rs2_rdata)
+    ,.rvfi_ex_trap(rvfi_ex_trap)
+`endif
 );
 
 memory_instruction_t memory_instruction;
@@ -1138,6 +1219,76 @@ writeback writeback_m(
     .memory_instruction_in(memory_instruction),
     .writeback_instruction_out(writeback_instruction)
 );
+
+`ifdef RVFI
+// ---------------------------------------------------------------------------
+// RVFI commit record.
+//
+// An instruction is in EX/MEM for one cycle (the memory stage always advances)
+// and in MEM/WB the next, which is when its load data and write-back value are
+// available. The shadow below runs in lockstep with that, one stage behind
+// execute, so the record is assembled exactly at the commit point.
+// ---------------------------------------------------------------------------
+logic        rvfi_wb_valid, rvfi_wb_trap;
+logic [31:0] rvfi_wb_insn, rvfi_wb_pc, rvfi_wb_next_pc;
+logic [4:0]  rvfi_wb_rs1_addr, rvfi_wb_rs2_addr;
+logic [31:0] rvfi_wb_rs1_rdata, rvfi_wb_rs2_rdata;
+logic [31:0] rvfi_wb_mem_addr, rvfi_wb_mem_wdata;
+logic [3:0]  rvfi_wb_mem_rmask, rvfi_wb_mem_wmask;
+logic [63:0] rvfi_order_r;
+
+always_ff @(posedge clk) begin
+    if (reset) begin
+        rvfi_wb_valid <= 1'b0;
+        rvfi_order_r  <= 64'd0;
+    end else begin
+        rvfi_wb_valid      <= rvfi_ex_valid;
+        rvfi_wb_trap       <= rvfi_ex_trap;
+        rvfi_wb_insn       <= rvfi_ex_insn;
+        rvfi_wb_pc         <= rvfi_ex_pc;
+        rvfi_wb_next_pc    <= rvfi_ex_next_pc;
+        rvfi_wb_rs1_addr   <= rvfi_ex_rs1_addr;
+        rvfi_wb_rs2_addr   <= rvfi_ex_rs2_addr;
+        rvfi_wb_rs1_rdata  <= rvfi_ex_rs1_rdata;
+        rvfi_wb_rs2_rdata  <= rvfi_ex_rs2_rdata;
+        // The data request is issued while the instruction is in EX/MEM, i.e.
+        // the same cycle rvfi_ex_* is presented.
+        rvfi_wb_mem_addr   <= {data_mem_req.addr[31:2], 2'b00};
+        rvfi_wb_mem_rmask  <= data_mem_req.valid ? data_mem_req.do_read  : 4'd0;
+        rvfi_wb_mem_wmask  <= data_mem_req.valid ? data_mem_req.do_write : 4'd0;
+        rvfi_wb_mem_wdata  <= data_mem_req.data;
+
+        if (rvfi_valid)
+            rvfi_order_r <= rvfi_order_r + 64'd1;
+    end
+end
+
+assign rvfi_valid      = rvfi_wb_valid;
+assign rvfi_order      = rvfi_order_r;
+assign rvfi_insn       = rvfi_wb_insn;
+assign rvfi_trap       = rvfi_wb_trap;
+assign rvfi_halt       = 1'b0;
+assign rvfi_intr       = 1'b0;
+assign rvfi_mode       = 2'd3;          // machine mode only
+assign rvfi_ixl        = 2'd1;          // RV32
+assign rvfi_rs1_addr   = rvfi_wb_rs1_addr;
+assign rvfi_rs2_addr   = rvfi_wb_rs2_addr;
+assign rvfi_rs1_rdata  = (rvfi_wb_rs1_addr == 5'd0) ? 32'd0 : rvfi_wb_rs1_rdata;
+assign rvfi_rs2_rdata  = (rvfi_wb_rs2_addr == 5'd0) ? 32'd0 : rvfi_wb_rs2_rdata;
+// writeback_instruction is combinational off MEM/WB, so it lines up with the
+// shadow. A trapping or non-writing instruction reports x0 / zero.
+assign rvfi_rd_addr    = (writeback_instruction.is_instruction_valid
+                          && writeback_instruction.is_writeback_valid)
+                         ? writeback_instruction.wbs : 5'd0;
+assign rvfi_rd_wdata   = (rvfi_rd_addr == 5'd0) ? 32'd0 : writeback_instruction.wbd;
+assign rvfi_pc_rdata   = rvfi_wb_pc;
+assign rvfi_pc_wdata   = rvfi_wb_next_pc;
+assign rvfi_mem_addr   = rvfi_wb_mem_addr;
+assign rvfi_mem_rmask  = rvfi_wb_mem_rmask;
+assign rvfi_mem_wmask  = rvfi_wb_mem_wmask;
+assign rvfi_mem_rdata  = data_mem_rsp.data;
+assign rvfi_mem_wdata  = rvfi_wb_mem_wdata;
+`endif
 
 control control_m(
     .stall(stall),

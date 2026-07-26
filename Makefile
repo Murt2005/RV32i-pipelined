@@ -61,6 +61,16 @@ $(SIM_IVERILOG): itop.sv top.sv cpu.sv memory.sv memory_io.sv riscv.sv riscv32_c
 	mkdir -p $(dir $@)
 	$(IVERILOG) -g2012 -o $@ itop.sv
 
+# Same design with the RVFI commit port enabled. Separate binary so the normal
+# simulator, and the synthesised build, carry none of the instrumentation.
+build/sim/result-rvfi: itop.sv top.sv cpu.sv memory.sv memory_io.sv riscv.sv riscv32_common.sv base.sv system.sv
+	mkdir -p $(dir $@)
+	$(IVERILOG) -g2012 -DRVFI -o $@ itop.sv
+
+.PHONY: rvfi-check
+rvfi-check: build/sim/result-rvfi $(TOOLS) riscv-tests
+	python3 host/rvfi_check.py --all
+
 run-legacy-iverilog: result-iverilog
 
 # Run one test by stem under tests/ (e.g. TEST_STEM=isa/add_sub)
