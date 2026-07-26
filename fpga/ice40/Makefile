@@ -11,6 +11,10 @@ TOP        := rv32_top
 PCF        := $(TOP).pcf
 ROOT       := ../..
 
+# Identifies exactly which RTL this bitstream was built from, so the host can
+# refuse to talk to a stale one. The file list is shared with rv32_host.py.
+BUILD_ID   := $(shell cat $$(cat rtl-sources.txt) | shasum -a 256 | cut -c1-8)
+
 CLK_FREQ   ?= 6000000
 BAUD_RATE  ?= 500000
 
@@ -43,6 +47,7 @@ $(BUILD)/$(TOP).json: $(BUILD)/$(TOP).v
 	yosys -q -p "read_verilog $<; \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
 		chparam -set BAUD_RATE $(BAUD_RATE) $(TOP); \
+		chparam -set BUILD_ID 32'h$(BUILD_ID) $(TOP); \
 		synth_ice40 -top $(TOP) -abc9 -dff -json $@"
 
 # ---- 3. place and route ---------------------------------------------------

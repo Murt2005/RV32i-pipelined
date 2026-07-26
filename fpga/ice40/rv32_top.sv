@@ -36,12 +36,18 @@
 //   'H' 0x48    halt        -> 'h'
 //   'S' 0x53    status      -> 's', {6'b0, halted, running}
 //   'T' 0x54    stall rate  -> rate[1], then 't'  (0 disables; see below)
+//   'B' 0x42    build id    -> 'b', 4 bytes LE identifying the RTL that was built
 // ---------------------------------------------------------------------------
 
 module rv32_top #(
     parameter int CLK_FREQ  = 6000000,      // must equal the firmware's ice_fpga_init()
     parameter int BAUD_RATE = 500000,       // exact /12 of 6 MHz -> zero baud error
-    parameter [31:0] RESET_PC = 32'h0001_0000
+    parameter [31:0] RESET_PC = 32'h0001_0000,
+    // Hash of the RTL sources, set by the Makefile. The protocol VERSION only
+    // tracks the wire protocol, so a bitstream built from older core RTL still
+    // answers a ping happily -- which already cost one debugging session
+    // chasing a "hardware bug" that was really a stale bitstream.
+    parameter [31:0] BUILD_ID = 32'h0000_0000
 ) (
     input  logic clk,          // pin 35, G0 global buffer, from RP2350 GPOUT0
     input  logic reset_n,      // pin 10, ICE_PB push button, active low
@@ -54,7 +60,7 @@ module rv32_top #(
 
     localparam int CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;
 
-    localparam [7:0] VERSION      = 8'h04;
+    localparam [7:0] VERSION      = 8'h05;
     localparam [7:0] EOT          = 8'h04;
     localparam [31:0] MMIO_PUTCHAR = 32'h0002_FFF8;
     localparam [31:0] MMIO_HALT    = 32'h0002_FFFC;
@@ -223,7 +229,9 @@ module rv32_top #(
         S_RD_REQ = 4'd8,    // issue the word read
         S_RD_WAIT= 4'd9,    // memory response lands the next cycle
         S_RD_PUSH= 4'd10,   // hand one byte to the transmit queue
-        S_TRATE  = 4'd11    // collect the stall-injection rate byte
+        S_TRATE  = 4'd11,   // collect the stall-injection rate byte
+        S_BID_ACK= 4'd12,   // emit 'b'
+        S_BID    = 4'd13    // then the four build-id bytes
     } ldr_state_t;
 
     ldr_state_t   state;
@@ -234,6 +242,7 @@ module rv32_top #(
     logic         resp_two;
     logic         halt_pending;
     logic [7:0]   rx_err_count;
+    logic [1:0]   bid_idx;
     // Memory clear. SPRAM keeps its contents across runs, while the simulator's
     // memory.sv zeroes its arrays in an `initial` block. Without this the two
     // do not start from the same state, and a test that asserts a location the
@@ -279,6 +288,14 @@ module rv32_top #(
             txq_push   = 1'b1;
             txq_din    = (state == S_RESP1) ? resp0 : resp1;
             resp_ready = 1'b1;
+        end else if (!txq_full && state == S_BID_ACK) begin
+            txq_push = 1'b1;
+            txq_din  = 8'h62;                       // 'b'
+            rd_ready = 1'b1;
+        end else if (!txq_full && state == S_BID) begin
+            txq_push = 1'b1;
+            txq_din  = BUILD_ID[{bid_idx, 3'b000} +: 8];
+            rd_ready = 1'b1;
         end else if (!txq_full && state == S_RD_ACK) begin
             txq_push = 1'b1;
             txq_din  = 8'h72;                       // 'r', ahead of the payload
@@ -310,6 +327,7 @@ module rv32_top #(
             rd_from_inst  <= 1'b0;
             rd_word       <= 32'd0;
             stall_rate    <= 8'd0;
+            bid_idx       <= 2'd0;
             ldr_req       <= memory_io_no_req;
         end else begin
             ldr_req.valid <= 1'b0;      // single-cycle pulse
@@ -350,6 +368,10 @@ module rv32_top #(
                             end
                             8'h54: begin                 // 'T' stall rate
                                 state <= S_TRATE;
+                            end
+                            8'h42: begin                 // 'B' build id
+                                bid_idx <= 2'd0;
+                                state   <= S_BID_ACK;
                             end
                             8'h47: begin                 // 'G' go
                                 cpu_run    <= 1'b1;
@@ -473,6 +495,17 @@ module rv32_top #(
                         load_len  <= load_len - 16'd1;
                         if (load_len == 16'd1) state <= S_IDLE;
                         else                   state <= S_RD_REQ;
+                    end
+                end
+
+                S_BID_ACK: begin
+                    if (rd_ready) state <= S_BID;
+                end
+
+                S_BID: begin
+                    if (rd_ready) begin
+                        bid_idx <= bid_idx + 2'd1;
+                        if (bid_idx == 2'd3) state <= S_IDLE;
                     end
                 end
 

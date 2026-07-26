@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rv32_model import Rv32Model                                # noqa: E402
 from rv32_host import (open_board, Rv32Error, TEXT_BASE,        # noqa: E402
-                       DATA_BASE)
+                       DATA_BASE, check_build_id)
 
 # x31 is reserved as the scratch-memory base pointer and is never written by
 # generated code, so every load and store is guaranteed to land in bounds.
@@ -311,6 +311,8 @@ def main():
     except Rv32Error as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    check_build_id(board, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
     try:
         board.set_stall_rate(args.stall_rate)

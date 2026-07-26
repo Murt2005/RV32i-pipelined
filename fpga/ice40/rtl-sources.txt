@@ -1,0 +1,9 @@
+rv32_top.sv
+uart.sv
+memory_spram.sv
+../../cpu.sv
+../../riscv.sv
+../../riscv32_common.sv
+../../memory_io.sv
+../../base.sv
+../../system.sv

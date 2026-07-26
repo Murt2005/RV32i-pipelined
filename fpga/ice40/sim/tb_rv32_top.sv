@@ -185,7 +185,7 @@ module tb_rv32_top();
         send_byte(8'h00);                        // NOP, must be ignored
         send_byte(8'h50);                        // 'P'
         expect_byte(8'h70, "ping reply");
-        expect_byte(8'h04, "version");
+        expect_byte(8'h05, "version");
         $display("PING ok");
 
         send_byte(8'h5A);                        // 'Z' zero both memories

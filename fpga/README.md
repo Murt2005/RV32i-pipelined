@@ -110,12 +110,21 @@ idle state so idle filler is harmless.
 | `H` 0x48 | halt | `h` 0x68 |
 | `S` 0x53 | status | `s` 0x73, `{5'b0, uart_err, halted, running}` |
 | `T` 0x54 | stall injection rate: `rate[1]` | `t` 0x74 |
+| `B` 0x42 | build id | `b` 0x62, then 4 bytes LE |
 
 Program output is raw bytes between the `g` and the EOT sentinel; the test
 programs emit ASCII only, so `0x04` is unambiguous.
 
 The version byte is checked by the host, so a stale bitstream paired with a
 newer host fails immediately and explicitly instead of misbehaving.
+
+The version only tracks the *wire protocol*, though, so a bitstream built from
+older **core** RTL still answers a ping perfectly happily — which cost one
+debugging session chasing a hardware bug that was really a missing reflash. The
+`B` command reports a hash of the RTL the bitstream was built from
+(`fpga/ice40/rtl-sources.txt` lists the files, and both the Makefile and
+`rv32_host.py` hash exactly that list), and the host warns when it differs from
+the working tree.
 
 ## LEDs
 
