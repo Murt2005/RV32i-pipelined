@@ -25,3 +25,6 @@ __pycache__/
 formal/smoke/
 formal/rf/
 build/formal/
+
+# macOS
+.DS_Store
