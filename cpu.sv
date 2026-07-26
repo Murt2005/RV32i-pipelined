@@ -1089,7 +1089,7 @@ endmodule
 // ---------------------------------------------------------------------------
 module core #(
     parameter btb_enable  = 1,
-    parameter btb_entries = 16
+    parameter btb_entries = 8
 ) (
     input logic       clk,
     input logic       reset,
