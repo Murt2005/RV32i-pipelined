@@ -20,6 +20,22 @@ cd formal && sby -f smoke.sby      # expect FAIL with a counterexample trace
 
 ## riscv-formal
 
+**Status: all 43 checks pass.** 37 per-instruction checks covering the whole of
+RV32I, plus the six consistency checks:
+
+| Check | What it proves |
+|---|---|
+| `insn_*` (37) | each instruction matches the ISA model for *every* operand value and reachable pipeline state |
+| `reg` | a register read returns what was last written to it — i.e. the bypass network never lies |
+| `pc_fwd` / `pc_bwd` | consecutive instructions' PCs chain correctly — no instruction skipped, none executed twice |
+| `causal` | an instruction never depends on a value produced after it |
+| `unique` | `rvfi_order` is strictly increasing — nothing retires twice |
+| `liveness` | the core always eventually retires an instruction — it cannot deadlock |
+
+`liveness` is the one worth calling out: every simulator wedge hit while
+building this (a combinational loop from the BTB training path, a stall that
+never cleared) was a violation of exactly that property, found the slow way.
+
 ```bash
 brew install yices2                # solver
 git clone https://github.com/YosysHQ/sby /tmp/sby

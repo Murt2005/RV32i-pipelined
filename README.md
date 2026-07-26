@@ -85,6 +85,16 @@ Run one test: `make run-test-<name>-iverilog` (e.g. `run-test-isa-add_sub-iveril
 
 Against real hardware (see `fpga/README.md`), `host/rv32_diff.py` additionally runs randomly generated programs on the FPGA and on `host/rv32_model.py`, a plain instruction-at-a-time RV32I interpreter, and compares all 30 general registers plus the scratch memory. Because the model has no pipeline, bypassing or hazard logic, it shares no structure with the RTL — which is what makes the comparison meaningful. This is how the `blt`/`bge` signed-overflow bug was found.
 
+## Formal verification
+
+`formal/` runs [riscv-formal](https://github.com/YosysHQ/riscv-formal) against
+the core through an RVFI commit port. **All 43 checks pass**: 37 per-instruction
+proofs covering RV32I, plus `reg`, `pc_fwd`, `pc_bwd`, `causal`, `unique` and
+`liveness`. See `formal/README.md`.
+
+Unlike the test suites, these reason about *every* operand value and every
+reachable pipeline state rather than the ones a test happened to pick.
+
 ## Make Targets
 
 | Command | Description |
