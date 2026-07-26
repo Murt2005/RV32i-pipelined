@@ -2,7 +2,25 @@
 `include "memory.sv"
 `include "cpu.sv"
 
-module top(input clk, input reset, output logic halt);
+// stall_rate drives the core's stall input from an LFSR, `stall_rate`/256 of
+// the time. It mirrors what the pico2-ice top does with transmit-queue
+// backpressure, and exists here because the stall and fetch-realign paths are
+// otherwise unreachable in simulation -- coverage showed them at zero, which
+// meant the fetch redirect fix had no fast regression behind it.
+module top(input clk, input reset, input [7:0] stall_rate, output logic halt);
+
+logic [15:0] stall_lfsr;
+logic        cpu_stall;
+
+always @(posedge clk) begin
+    if (reset)
+        stall_lfsr <= 16'hACE1;
+    else
+        stall_lfsr <= stall_lfsr[0] ? ((stall_lfsr >> 1) ^ 16'hB400)
+                                    : (stall_lfsr >> 1);
+end
+
+assign cpu_stall = (stall_lfsr[7:0] < stall_rate);
 
 
 logic retired;
@@ -28,7 +46,7 @@ memory_io_rsp   data_mem_rsp;
 core the_core(
 	.clk(clk)
 	,.reset(reset)
-	,.stall(1'b0)               // simulation memories always accept a write
+	,.stall(cpu_stall)
 	,.clear_regs(1'b0)          // the register file's `initial` block covers this
 	,.retired(retired)
     ,.reset_pc(32'h0001_0000)

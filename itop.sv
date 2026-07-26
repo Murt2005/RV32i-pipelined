@@ -9,6 +9,7 @@ module itop();
 logic clk = 0;
 logic reset = 1;
 logic halt;
+logic [7:0] stall_rate = 8'd0;
 
 integer max_cycles;
 integer cycles = 0;
@@ -16,6 +17,7 @@ integer cycles = 0;
 top the_top(
     .clk(clk)
     ,.reset(reset)
+    ,.stall_rate(stall_rate)
     ,.halt(halt));
 
 always #5 clk = ~clk;
@@ -34,6 +36,10 @@ initial begin
     //   ./result-iverilog +timeout=50000
     if (!$value$plusargs("timeout=%d", max_cycles))
         max_cycles = 500000;
+
+    // Stall the pipeline pseudo-randomly:  ./result-iverilog +stallrate=128
+    if (!$value$plusargs("stallrate=%d", stall_rate))
+        stall_rate = 8'd0;
 
     reset = 1;
     #16 reset = 0;

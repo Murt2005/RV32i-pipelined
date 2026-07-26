@@ -25,6 +25,11 @@ int main(int argc, char** argv) {
 
     top->reset = 1;           // Set some inputs
 
+    // Same knob as the iverilog testbench's +stallrate.
+    top->stall_rate = 0;
+    if (const char *sr = std::getenv("RV32_STALL_RATE"))
+        top->stall_rate = (unsigned char)std::strtoul(sr, nullptr, 10);
+
     // Watchdog, so a program that never halts cannot hang a coverage sweep.
     vluint64_t max_time = 2000000;
     if (const char *env = std::getenv("RV32_MAX_CYCLES"))

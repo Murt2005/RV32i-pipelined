@@ -26,6 +26,10 @@ TESTS_RUN_NAMES := $(subst /,-,$(TESTS_STEMS))
 
 SIM_IVERILOG := build/sim/result-iverilog
 
+# Pipeline stall rate out of 256 for simulation runs; 0 disables.
+#   make run-tests-iverilog STALL_RATE=128
+STALL_RATE ?= 0
+
 .PHONY: run-tests-iverilog run-one-iverilog run-legacy-iverilog
 
 .c.o:
@@ -64,7 +68,7 @@ run-one-iverilog: $(TOOLS) $(SIM_IVERILOG)
 	/bin/bash ./elftohex.sh build/tests/$(TEST_STEM).elf .
 	mkdir -p build/hex/$(TEST_STEM)
 	cp code0.hex code1.hex code2.hex code3.hex data0.hex data1.hex data2.hex data3.hex build/hex/$(TEST_STEM)/
-	./$(SIM_IVERILOG)
+	./$(SIM_IVERILOG) +stallrate=$(STALL_RATE)
 
 # Friendly per-test targets, e.g. run-test-isa-add_sub-iverilog
 run-test-%-iverilog: $(TOOLS) $(SIM_IVERILOG)
@@ -128,7 +132,7 @@ run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
 		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
-		out=`./$(SIM_IVERILOG) 2>/dev/null | grep -E '^(PASS|FAIL)'`; \
+		out=`./$(SIM_IVERILOG) +stallrate=$(STALL_RATE) 2>/dev/null | grep -E '^(PASS|FAIL)'`; \
 		if [ "$$out" = "PASS" ]; then \
 			pass=$$((pass+1)); echo "PASS rv32ui-$$t"; \
 		else \
@@ -157,6 +161,9 @@ coverage: build/cov/Vtop $(TOOLS) riscv-tests
 		$(MAKE) -s build/tests/$$t.elf >/dev/null; \
 		/bin/bash ./elftohex.sh build/tests/$$t.elf . >/dev/null 2>&1; \
 		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`.dat \
+			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
+		RV32_STALL_RATE=128 \
+		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`-stall.dat \
 			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
 	done; \
 	for t in $(RVTESTS); do \
