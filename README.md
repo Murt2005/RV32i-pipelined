@@ -55,8 +55,11 @@ Tests are RV32I assembly programs under `tests/isa/` (ISA correctness) and `test
 
 - **`tests/isa/`** — add/sub, shifts, logic, compare, loads/stores (basic and sign-ext), LUI/AUIPC, branches (basic/signed/unsigned), jumps (JAL/JALR).
 - **`tests/hazards/`** — load-use stalls, load chains, branch-after-load/ALU, EX–EX and MEM–EX data hazards, bypass stress.
+- **`tests/riscv-tests/`** — the official [riscv-tests](https://github.com/riscv-software-src/riscv-tests) suite (submodule). The 40 `rv32ui` tests are built against a local environment in `tests/riscv-tests-env/`, because the suite's own `p` environment reports results via machine-mode CSRs and `ECALL` that this core does not implement. `fence_i` and `ma_data` are excluded: the first needs self-modifying code, which a Harvard machine with a separate instruction memory cannot do, and the second needs misaligned-access support the core neither implements nor traps.
 
 Run one test: `make run-test-<name>-iverilog` (e.g. `run-test-isa-add_sub-iverilog`). Run all: `make run-tests-iverilog`.
+
+Against real hardware (see `fpga/README.md`), `host/rv32_diff.py` additionally runs randomly generated programs on the FPGA and on `host/rv32_model.py`, a plain instruction-at-a-time RV32I interpreter, and compares all 30 general registers plus the scratch memory. Because the model has no pipeline, bypassing or hazard logic, it shares no structure with the RTL — which is what makes the comparison meaningful. This is how the `blt`/`bge` signed-overflow bug was found.
 
 ## Make Targets
 
@@ -68,6 +71,8 @@ Run one test: `make run-test-<name>-iverilog` (e.g. `run-test-isa-add_sub-iveril
 | `make test` | Build `test` ELF and generate `*.hex` (code/data) in project root. |
 | `make run-test-<name>-iverilog` | Build ELF for `tests/<name>.s` (e.g. `isa/add_sub` → `run-test-isa-add_sub-iverilog`), run that test under Icarus. |
 | `make run-tests-iverilog` | Run all tests under `tests/isa/` and `tests/hazards/`. |
+| `make riscv-tests` | Build the official riscv-tests `rv32ui` suite into `build/riscv-tests/`. |
+| `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus. |
 | `make clean` | Remove build artifacts, `*.hex`, `test`, sim binaries, `test.vcd`, `obj_dir/`. |
 
 **Note**: `result-iverilog` and `result-verilator` depend on `test`; ensure `test.c` and `start.s` are built and `elftohex.sh` has been run so `code*.hex` and `data*.hex` exist before simulating.
@@ -77,7 +82,7 @@ Run one test: `make run-test-<name>-iverilog` (e.g. `run-test-isa-add_sub-iveril
 | File | Description |
 |------|-------------|
 | **RTL (SystemVerilog)** | |
-| `itop.sv` | Icarus Verilog testbench: clk/reset/halt, `$dumpvars`, includes `top.sv`. |
+| `itop.sv` | Icarus Verilog testbench: clk/reset/halt, includes `top.sv`. Waveforms are opt-in (`+vcd`), and a watchdog stops a runaway program (`+timeout=<cycles>`, default 500000). |
 | `top.sv` | Top-level: instantiates core + code memory + data memory; MMIO putchar/halt. |
 | `cpu.sv` | Pipeline core: modules `fetch`, `decode_and_writeback`, `execute`, `memory`, `writeback`, `control`. |
 | `riscv.sv` | Package wrapper; includes `riscv32_common.sv` (or 64-bit). |

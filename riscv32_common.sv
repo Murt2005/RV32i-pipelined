@@ -2,6 +2,13 @@
 `define enable_ext_m        1
 `define tag_size            5
 
+// Package-local alias. `bool` is also declared at compilation-unit scope in
+// base.sv, but $unit types are not visible inside a package. Icarus has `bool`
+// built in, so it must not be redeclared there.
+`ifndef __ICARUS__
+typedef logic bool;
+`endif
+
 typedef logic [`tag_size - 1:0]             tag;
 typedef logic [4:0]                         shamt;
 typedef logic [31:0]                        instr32;
@@ -24,9 +31,9 @@ typedef enum {
 
 function automatic bool is_16bit_instruction(logic [31:0] instr);
     if (instr[1:0] == 2'b11)
-        return false;
+        return 1'b0;
     else
-        return true;
+        return 1'b1;
 endfunction
 
 ////// 32 bit instruction decode helpers.
@@ -176,8 +183,8 @@ endfunction
 
 function automatic bool decode_writeback(opcode_q in);
     case (in)
-        q_load, q_jalr, q_jal, q_op_imm, q_op, q_auipc, q_lui:  return true;
-        default: return false;
+        q_load, q_jalr, q_jal, q_op_imm, q_op, q_auipc, q_lui:  return 1'b1;
+        default: return 1'b0;
     endcase
 endfunction
 
@@ -232,24 +239,39 @@ typedef enum logic [2:0] {
     ,bgeu = 7
 }   branch_ops;
 
-function automatic bool take_branch(ext_operand alu_result, funct3 f3); begin
-    logic is_zero = (alu_result[31:0] == 32'd0) ? true : false;
+function automatic bool take_branch(ext_operand in1, ext_operand in2,
+                                   ext_operand alu_result, funct3 f3); begin
+    logic is_zero = (alu_result[31:0] == 32'd0) ? 1'b1 : 1'b0;
+
+    // alu_result is {1'b0,in1} - {1'b0,in2}, so bit 32 is the borrow out of an
+    // unsigned subtract, i.e. exactly (in1 <u in2).
+    logic ult = alu_result[`word_size];
+
+    // Signed less-than is NOT the sign bit of that difference: when the signed
+    // subtraction overflows, the truncated result has the wrong sign. Flipping
+    // both sign bits maps signed order onto unsigned order, which is the same
+    // as xor-ing them into the unsigned result.
+    //
+    // e.g. in1 = 0x8534f457 (-2060127145), in2 = 0x2c33be0a (741588490):
+    // in1 <s in2 is true, but bit 31 of the difference is 0.
+    logic slt = ult ^ in1[`word_size - 1] ^ in2[`word_size - 1];
 
     case (f3)
         beq:    return is_zero;
         bne:    return !is_zero;
-        blt:    return alu_result[`word_size - 1];  // (in1 < in2) ? true : false;
-        bge:    return !alu_result[`word_size - 1]; //(in1 >= in2) ? true : false;
-        bltu:   return alu_result[`word_size];  // (pos_in1 < pos_in2) ? true : false;
-        bgeu:   return !alu_result[`word_size]; //(pos_in1 >= pos_in2) ? true : false;
+        blt:    return slt;
+        bge:    return !slt;
+        bltu:   return ult;
+        bgeu:   return !ult;
         default:
-            return false;
+            return 1'b0;
     endcase
 end
 endfunction
 
 function automatic word_address compute_next_pc(
      ext_operand    rd1
+    ,ext_operand    rd2
     ,ext_operand    alu_result
     ,word           imm
     ,word_address   pc
@@ -264,7 +286,7 @@ function automatic word_address compute_next_pc(
             in2 = imm[`word_size-1:0];
         end
         q_branch:
-            if (take_branch(alu_result, f3))
+            if (take_branch(rd1, rd2, alu_result, f3))
                 in2 = imm[`word_size-1:0];
         default: begin end
     endcase

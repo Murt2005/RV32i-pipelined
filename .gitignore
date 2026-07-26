@@ -1,0 +1,22 @@
+# Build artifacts
+build/
+obj_dir/
+*.o
+*.hex
+*.vcd
+dumphex
+test
+result-iverilog
+result-verilator
+
+# FPGA
+fpga/ice40/build/
+fpga/ice40/sim/tb_rv32_top
+
+# Firmware (pico-sdk out-of-tree build)
+firmware/build/
+firmware/pico-sdk
+
+# Python
+.venv/
+__pycache__/

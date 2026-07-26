@@ -119,11 +119,17 @@ module fetch(
 import riscv::*;
 
 word fetch_pc;
-bool clear_fetch_stream;                    
+bool clear_fetch_stream;
 word clear_to_this_pc;
 instr32 latched_instruction_read;
 bool latched_instruction_valid;
 word latched_instruction_pc;
+
+// Address of the request issued in the previous cycle -- i.e. the response
+// arriving right now, which a stall would drop. Needed to realign correctly
+// when nothing is latched yet (see the stall handling below).
+word issued_pc;
+bool issued_valid;
 
 // Combinational: instruction memory request and fetch output
 always @(*) begin
@@ -159,7 +165,12 @@ always_ff @(posedge clk) begin
         latched_instruction_valid <= false;
         clear_fetch_stream <= false;
         clear_to_this_pc <= 0;
+        issued_pc <= 0;
+        issued_valid <= false;
     end else begin
+        issued_valid <= instruction_memory_request.valid;
+        if (instruction_memory_request.valid)
+            issued_pc <= fetch_pc;
         // if we receive a valid response from instruction memory, either discard or latch it if we can advance
         if (instruction_memory_response.valid) begin
             if (clear_fetch_stream && instruction_memory_response.addr != clear_to_this_pc) begin
@@ -188,11 +199,32 @@ always_ff @(posedge clk) begin
             clear_fetch_stream <= true;
             clear_to_this_pc <= branch_pc_redirect_request_in.pc;
         end else if (!fetch_control_signal_in.advance) begin
-            // if decode is stalled, realign PC to instruction after latched instruction
-            // so we have correct next instruction after the stall clears.
-            fetch_pc <= latched_instruction_pc + 4;
-            clear_fetch_stream <= true;
-            clear_to_this_pc <= latched_instruction_pc + 4;
+            // Decode is stalled, so no request goes out and this cycle's
+            // response is dropped. Realign the PC to whatever we must re-fetch
+            // once the stall clears. Which address that is depends on what is
+            // in flight, and getting it wrong silently resumes at the wrong
+            // instruction:
+            if (latched_instruction_valid) begin
+                // Normal case. The latched instruction is re-presented to
+                // decode, so the stream restarts after it.
+                fetch_pc <= latched_instruction_pc + 4;
+                clear_fetch_stream <= true;
+                clear_to_this_pc <= latched_instruction_pc + 4;
+            end else if (clear_fetch_stream) begin
+                // A redirect is still resolving: nothing is latched and the
+                // in-flight response is wrong-path. fetch_pc / clear_to_this_pc
+                // already name the target, so hold them. Without this the
+                // realign above would overwrite a freshly applied branch target
+                // with a stale latched_instruction_pc + 4.
+                fetch_pc <= clear_to_this_pc;
+                clear_fetch_stream <= true;
+            end else if (issued_valid) begin
+                // Nothing latched and no redirect pending: re-issue the request
+                // whose response we are dropping.
+                fetch_pc <= issued_pc;
+                clear_fetch_stream <= true;
+                clear_to_this_pc <= issued_pc;
+            end
         end
     end
 end
@@ -222,7 +254,11 @@ module decode_and_writeback(
 
 import riscv::*;
 
-// Register file and bypass state
+// Register file and bypass state.
+// ram_style forces the 32x32 file into block RAM on iCE40. Left in logic it
+// costs ~1024 FFs plus two 32:1 x 32-bit read muxes, which is the difference
+// between fitting on a UP5K and not. Ignored by simulators.
+(* ram_style = "block" *)
 word register_file[0:31];
 word register_file_bypass_rd;
 tag register_file_bypass_rs;
@@ -284,16 +320,16 @@ always_ff @(posedge clk) begin
     end
 
     // Register file read: when we advance with a valid instruction, latch the read data.
-    // Use same-cycle bypass from writeback when writeback is writing to rs1/rs2 this cycle.
+    //
+    // This is deliberately a *plain* synchronous read with no mux on the output
+    // register, so it maps onto a block RAM. The write-back-during-decode case
+    // it used to handle here is already covered one stage later by execute's
+    // level-2 bypass (register_file_bypass_in), which is registered from the
+    // very same write-back event and lands on exactly the cycle this
+    // instruction reaches execute.
     if (decode_control_signal_in.advance && fetched_instruction_in.is_instruction_valid) begin
-        if (writeback_control_signal_in.advance && writeback_instruction_in.is_instruction_valid && writeback_instruction_in.is_writeback_valid && rs1 == writeback_instruction_in.wbs)
-            decoded_instruction_out.rd1 <= writeback_instruction_in.wbd;
-        else
-            decoded_instruction_out.rd1 <= register_file[rs1];
-        if (writeback_control_signal_in.advance && writeback_instruction_in.is_instruction_valid && writeback_instruction_in.is_writeback_valid && rs2 == writeback_instruction_in.wbs)
-            decoded_instruction_out.rd2 <= writeback_instruction_in.wbd;
-        else
-            decoded_instruction_out.rd2 <= register_file[rs2];
+        decoded_instruction_out.rd1 <= register_file[rs1];
+        decoded_instruction_out.rd2 <= register_file[rs2];
     end
 
     // Write-back: commit result from writeback stage into register file and set bypass
@@ -423,6 +459,7 @@ always_comb begin
     // Next PC: for non-control-flow instructions this is PC+4; for branches/jumps it is the target.
     next_pc_comb = compute_next_pc(
         cast_to_ext_operand(rd1),
+        cast_to_ext_operand(rd2),
         execute_result_comb,
         decoded_instruction_in.imm,
         decoded_instruction_in.pc,
@@ -588,6 +625,7 @@ endmodule
 // Currently no hazard or mispredict handling; all stages always advance.
 // ---------------------------------------------------------------------------
 module control(
+    input logic stall,
     input memory_io_rsp instruction_memory_response,
     input memory_io_rsp data_memory_response,
     input pc_control_t pc_control_in,
@@ -677,6 +715,37 @@ always_comb begin
             decode_control_signal_out.flush = true;
         end
     end
+
+    // ------------------------------------------------------------------
+    // 3. EXTERNAL STALL (highest priority, overrides everything above)
+    //
+    // Backpressure from a memory-mapped peripheral that cannot accept another
+    // write yet (the board's UART transmitter). The memory_io interface has no
+    // way to express "not ready", so the front of the pipeline is frozen
+    // instead.
+    //
+    // This takes exactly the same shape as the load-use stall above: freeze
+    // fetch, decode and execute, and let memory and writeback drain. Two
+    // reasons it must be this shape and not a whole-pipeline freeze:
+    //
+    //   * Correctness. The store already in EX/MEM issues its request once and
+    //     EX/MEM then takes a bubble (execute is not advancing while memory
+    //     is), so the peripheral sees each write exactly once. The instruction
+    //     in ID/EX is re-decoded when the stall lifts, because the fetch latch
+    //     still holds it.
+    //   * Timing. Gating memory_control_signal_out.advance with `stall` would
+    //     put the peripheral's own full/empty flag on a combinational path
+    //     through the whole control block and back out through the memory
+    //     stage's request -- a loop through the peripheral that measured
+    //     112 ns and capped the design at 8.9 MHz.
+    // ------------------------------------------------------------------
+    if (stall) begin
+        fetch_control_signal_out.advance = false;
+        decode_control_signal_out.advance = false;
+        execute_control_signal_out.advance = false;
+        decode_control_signal_out.flush = false;
+        branch_pc_redirect_request_out.is_pc_valid = false;
+    end
 end
 endmodule
 
@@ -688,6 +757,7 @@ module core #(
 ) (
     input logic       clk,
     input logic       reset,
+    input logic       stall,          // freeze the whole pipeline (peripheral backpressure)
     input logic       [`word_address_size-1:0] reset_pc,
     output memory_io_req   inst_mem_req,
     input  memory_io_rsp   inst_mem_rsp,
@@ -774,6 +844,7 @@ writeback writeback_m(
 );
 
 control control_m(
+    .stall(stall),
     .instruction_memory_response(inst_mem_rsp),
     .data_memory_response(data_mem_rsp),
     .pc_control_in(pc_control),

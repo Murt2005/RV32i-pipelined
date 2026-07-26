@@ -93,3 +93,47 @@ result-iverilog: itop.sv top.sv cpu.sv test
 clean:
 	rm -rf dumphex test.vcd obj_dir/ *.o result-verilator result-iverilog *.hex test.bin test build
 
+
+# --------------------------------------------------------------------
+# Official riscv-tests rv32ui suite
+#
+# Uses a local environment (tests/riscv-tests-env) instead of the suite's own
+# `p` environment, which reports results through machine-mode CSRs and ECALL
+# that this core does not implement.
+# --------------------------------------------------------------------
+RVTESTS_DIR := tests/riscv-tests/isa/rv32ui
+
+# fence_i: self-modifying code. This is a Harvard machine with a separate
+#          instruction memory, so a store can never reach the fetch stream.
+# ma_data: misaligned load/store. The core neither supports nor traps them.
+RVTESTS_EXCLUDE := fence_i ma_data
+
+RVTESTS_ALL   := $(basename $(notdir $(wildcard $(RVTESTS_DIR)/*.S)))
+RVTESTS       := $(filter-out $(RVTESTS_EXCLUDE),$(RVTESTS_ALL))
+RVTESTS_ELF   := $(addprefix build/riscv-tests/,$(addsuffix .elf,$(RVTESTS)))
+
+RVTEST_FLAGS := -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles -fno-builtin \
+                -Itests/riscv-tests-env -Itests/riscv-tests/isa/macros/scalar \
+                -T tests/riscv-tests-env/link.ld
+
+.PHONY: riscv-tests run-riscv-tests-iverilog
+
+build/riscv-tests/%.elf: $(RVTESTS_DIR)/%.S tests/riscv-tests-env/riscv_test.h
+	mkdir -p $(dir $@)
+	$(CC) $(RVTEST_FLAGS) -o $@ $<
+
+riscv-tests: $(RVTESTS_ELF)
+
+run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
+	@pass=0; fail=0; \
+	for t in $(RVTESTS); do \
+		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
+		out=`./$(SIM_IVERILOG) 2>/dev/null | grep -E '^(PASS|FAIL)'`; \
+		if [ "$$out" = "PASS" ]; then \
+			pass=$$((pass+1)); echo "PASS rv32ui-$$t"; \
+		else \
+			fail=$$((fail+1)); echo "FAIL rv32ui-$$t  ($$out)"; \
+		fi; \
+	done; \
+	echo ""; echo "$$pass passed, $$fail failed, `echo $(RVTESTS) | wc -w | tr -d ' '` total"; \
+	[ $$fail -eq 0 ]

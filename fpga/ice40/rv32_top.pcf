@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------------------
+# pico2-ice pin constraints for rv32_top.
+#
+# These are iCE40 *package* pin numbers, taken from
+# firmware/pico-ice-sdk/rtl/pico2_ice.pcf. They are a different namespace from
+# the ICE_*_PIN macros in pico-ice-sdk/include/boards/pico2_ice.h, which are
+# RP2350 GPIO numbers for firmware. Mixing the two produces a silently dead
+# board.
+#
+# The RP2350 side of each net (verified against Board/Rev1/pico2-ice.pdf):
+#   iCE40 pin 35 (ICE_35_G0) <- RP2350 GPIO21, clock GPOUT0. Matches
+#                               pico2_fpga.pin_clock = 21 in ice_fpga_data.c.
+#                               Note ICE_GPOUT_CLOCK_PIN in pico2_ice.h says 22
+#                               and is stale -- the SDK does not use it.
+#   iCE40 pin  9 (ICE_9)     <- RP2350 GPIO28 = uart0 TX  -> our rx_pin
+#   iCE40 pin 11 (ICE_11)    -> RP2350 GPIO29 = uart0 RX  <- our tx_pin
+#   iCE40 pin 10 (ICE_10|PB) <- push button, real 10K pull-up on the board
+# ---------------------------------------------------------------------------
+
+set_io -nowarn clk      35
+set_io -nowarn -pullup yes reset_n 10
+
+set_io -nowarn rx_pin   9
+set_io -nowarn tx_pin   11
+
+# RGB LED, active low, driven by the FPGA.
+# Deliberately not touched by the firmware: both chips can reach these nets and
+# driving from both sides would be contention. With the FPGA unconfigured the
+# pins float to their pull-ups and the LED stays dark, which makes "LED dark"
+# itself a usable not-configured indication.
+set_io -nowarn led_g_n  39
+set_io -nowarn led_b_n  40
+set_io -nowarn led_r_n  41
