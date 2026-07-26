@@ -279,6 +279,7 @@ function automatic word_address compute_next_pc(
     ,funct3         f3); begin
     word in1 = pc;
     word in2 = 4;
+    word target;
     case (op_q)
         q_jal:  in2 = imm;
         q_jalr: begin
@@ -290,7 +291,18 @@ function automatic word_address compute_next_pc(
                 in2 = imm[`word_size-1:0];
         default: begin end
     endcase
-    return in1 + in2;
+
+    target = in1 + in2;
+
+    // "The target address is obtained by adding the sign-extended 12-bit
+    // I-immediate to the register rs1, then setting the least-significant bit
+    // of the result to zero." Without this an odd target is fetched as-is: the
+    // memory drops the low address bits but shuffle_store_data still rotates
+    // the word by addr[1:0], so the pipeline executes garbage.
+    if (op_q == q_jalr)
+        target[0] = 1'b0;
+
+    return target;
 end
 endfunction
 
