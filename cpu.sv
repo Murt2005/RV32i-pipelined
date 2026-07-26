@@ -498,7 +498,9 @@ import riscv::*;
 
 // Internal state
 ext_operand execute_result_comb;
+next_pc_result_t next_pc_result;
 word next_pc_comb;
+bool mispredict;
 word bypassed_rd1_comb;
 word bypassed_rd2_comb;
 
@@ -682,20 +684,33 @@ always_comb begin
 
 
     // Next PC: for non-control-flow instructions this is PC+4; for branches/jumps it is the target.
-    next_pc_comb = compute_next_pc(
+    next_pc_result = compute_next_pc(
         cast_to_ext_operand(rd1),
         cast_to_ext_operand(rd2),
         decoded_instruction_in.imm,
         decoded_instruction_in.pc,
+        fetched_instruction_in.pc,
         decoded_instruction_in.instruction_opcode,
         decoded_instruction_in.f3);
 
+    next_pc_comb  = next_pc_result.next_pc;
+    mispredict    = next_pc_result.mispredict;
+
     // A trap or an MRET overrides the normal next PC. mtvec is used in direct
     // mode: the low two bits select the mode and are not part of the address.
-    if (trap.taken)
+    //
+    // Both targets come from CSRs, i.e. registers, so their comparisons against
+    // the address fetch is presenting are parallel too -- only the select is
+    // serial. The mispredict flag must be overridden alongside next_pc_comb:
+    // leaving it at the non-trap value means the redirect to mtvec never fires
+    // and the trap silently does not happen.
+    if (trap.taken) begin
         next_pc_comb = {mtvec_r[`word_size-1:2], 2'b00};
-    else if (decoded_instruction_in.is_instruction_valid && is_mret)
+        mispredict   = ({mtvec_r[`word_size-1:2], 2'b00} != fetched_instruction_in.pc);
+    end else if (decoded_instruction_in.is_instruction_valid && is_mret) begin
         next_pc_comb = mepc_r;
+        mispredict   = (mepc_r != fetched_instruction_in.pc);
+    end
 
     // Train the branch predictor on resolved control transfers only. Traps
     // also change the next PC, but predicting them would be meaningless.
@@ -705,7 +720,7 @@ always_comb begin
 
     // Mispredict: the next PC we computed (next_pc_comb) is not what fetch is currently fetching (fetched_instruction_in.pc).
     // Control can use this to redirect fetch to correct_pc.
-    if (decoded_instruction_in.is_instruction_valid && next_pc_comb != fetched_instruction_in.pc) begin
+    if (decoded_instruction_in.is_instruction_valid && mispredict) begin
         pc_control_out.branch_redirect_needed = true;
         pc_control_out.branch_target_pc = next_pc_comb;
     end

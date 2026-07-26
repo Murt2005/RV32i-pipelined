@@ -339,22 +339,41 @@ function automatic bool take_branch(ext_operand in1, ext_operand in2,
 end
 endfunction
 
+// Next PC, together with whether fetch already went there.
+typedef struct packed {
+    word_address next_pc;
+    bool         mispredict;   // fetch is not presenting next_pc
+} next_pc_result_t;
+
 // Next PC.
 //
-// The three candidate targets are added up front, in parallel with each other
-// and with the ALU, and only the select is serial. Previously this built one
-// adder whose *operands* were chosen by the opcode and the branch condition,
-// which chained the adder behind everything that produced them.
-function automatic word_address compute_next_pc(
+// Two things are deliberately parallel here rather than serial:
+//
+//   * The three candidate targets are added up front, in parallel with each
+//     other and with the ALU. Previously this built one adder whose *operands*
+//     were chosen by the opcode and branch condition, chaining the adder
+//     behind everything that produced them.
+//   * Each candidate is compared against the address fetch is presenting, so
+//     the 32-bit comparison happens alongside the adders and only a 1-bit
+//     select is serial. Comparing after the target mux put a full-width
+//     compare directly in front of the control logic.
+//
+// Returning both from one function keeps the value and the mispredict flag
+// from drifting apart.
+function automatic next_pc_result_t compute_next_pc(
      ext_operand    rd1
     ,ext_operand    rd2
     ,word           imm
     ,word_address   pc
+    ,word_address   fetched_pc
     ,opcode_q       op_q
     ,funct3         f3); begin
     word pc_plus_4;
     word pc_plus_imm;
     word rs1_plus_imm;
+    bool miss_p4, miss_pimm, miss_rimm;
+    bool taken;
+    next_pc_result_t r;
 
     pc_plus_4   = pc + `word_size'd4;
     pc_plus_imm = pc + imm;
@@ -365,12 +384,22 @@ function automatic word_address compute_next_pc(
     // the word by addr[1:0], so the pipeline executes garbage.
     rs1_plus_imm = (rd1[`word_size-1:0] + imm) & ~(`word_size'd1);
 
+    miss_p4   = (pc_plus_4    != fetched_pc);
+    miss_pimm = (pc_plus_imm  != fetched_pc);
+    miss_rimm = (rs1_plus_imm != fetched_pc);
+
+    taken = take_branch(rd1, rd2, f3);
+
     case (op_q)
-        q_jal:    return pc_plus_imm;
-        q_jalr:   return rs1_plus_imm;
-        q_branch: return take_branch(rd1, rd2, f3) ? pc_plus_imm : pc_plus_4;
-        default:  return pc_plus_4;
+        q_jal:    begin r.next_pc = pc_plus_imm;  r.mispredict = miss_pimm; end
+        q_jalr:   begin r.next_pc = rs1_plus_imm; r.mispredict = miss_rimm; end
+        q_branch: begin
+            r.next_pc    = taken ? pc_plus_imm : pc_plus_4;
+            r.mispredict = taken ? miss_pimm   : miss_p4;
+        end
+        default:  begin r.next_pc = pc_plus_4;    r.mispredict = miss_p4; end
     endcase
+    return r;
 end
 endfunction
 
