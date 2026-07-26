@@ -85,18 +85,37 @@ the write-back-during-decode mux was removed from it; that case is already
 covered one stage later by `execute`'s level-2 bypass, which is registered from
 the same write-back event. 4389 → 2575 LUT4.
 
-**Clock is 6 MHz.** Post-place-and-route fMax is 8.4 MHz, limited by the
-combinational loop writeback → bypass → execute ALU → control. 6 MHz is an
-exact /2 of the 12 MHz crystal, so `ice_fpga_init()` sources it straight from
-XOSC with a clean 50% duty cycle, and 500000 baud is an exact /12 of it. Both
-UART ends therefore derive from the same crystal and cannot drift.
+**Clock is 12 MHz** — the crystal frequency exactly, so `ice_fpga_init()` passes
+XOSC straight through with divisor 1 and a clean 50% duty cycle. No fractional
+divider means no jitter on the FPGA's only clock, and 1 Mbaud is an exact /12
+of it, so both UART ends derive from the same crystal and cannot drift.
+
+Post-place-and-route fMax is 13.1 MHz, i.e. about 9% static margin. That is
+thinner than one would like, so the 12 MHz build is qualified on silicon —
+full regression, the rv32ui suite, and 200 randomised differential programs
+with the pipeline stalled — rather than on the timing estimate alone.
+
+Getting there took three changes to the critical path, which ran
+writeback → bypass → ALU → next-PC → control:
+
+| Change | fMax |
+|---|---|
+| baseline | 8.06 MHz |
+| branch condition and next-PC computed in parallel with the ALU | 11.45 |
+| next-PC candidates compared against the fetched address in parallel | 12.11 |
+| BTB sized at 8 entries | 13.13 |
+
+The ordering mattered more than any single change. Removing the BTB entirely
+was worth 1.8% at the start and 11.8% at the end: area only became the limiter
+once the logic depth came down from 50 levels to 22, at which point routing was
+72% of the delay.
 
 `CLK_FREQ` in `fpga/ice40/Makefile` **must** equal `FPGA_CLK_HZ` in
 `firmware/main.c`. The baud divisor is a synthesis-time constant, so a mismatch
 garbles bytes rather than producing silence.
 
-**Utilisation** (`nextpnr --up5k --package sg48`): 4854/5280 LC (91%),
-6/30 BRAM, 4/4 SPRAM, 7.6 MHz vs a 6 MHz constraint.
+**Utilisation** (`nextpnr --up5k --package sg48`): 4695/5280 LC (88%),
+6/30 BRAM, 4/4 SPRAM, 13.1 MHz unconstrained vs a 12 MHz target.
 
 ## Performance
 
@@ -112,12 +131,15 @@ each time it is released:
 taken branch and a store — and stores both counters where the host can read them:
 
 ```
-                    no BTB      with BTB
-cycles              32017        24022
-retired             20012        20012
-IPC                 0.625        0.833
-at 6 MHz          3.75 MIPS    5.00 MIPS
+                 before      after
+cycles            32017      24022
+IPC               0.625      0.833
+clock            6 MHz      12 MHz
+throughput     3.75 MIPS  10.00 MIPS
 ```
+
+The clock doubled because the critical path was shortened from 124 ns to about
+80 ns (8.06 -> 13.1 MHz fMax), and the IPC came from the branch target buffer.
 
 The gap was almost entirely taken branches — each one cost a redirect and a
 decode flush. `core` now has a 16-entry direct-mapped branch target buffer

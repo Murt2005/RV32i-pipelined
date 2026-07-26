@@ -59,7 +59,8 @@ EOT        = 0x04
 
 PROTO_VERSION = 0x05
 
-BAUD = 500000          # must equal BAUD_RATE in fpga/ice40/Makefile
+BAUD = 1000000         # must equal BAUD_RATE in fpga/ice40/Makefile
+CLK_HZ = 12_000_000    # must equal CLK_FREQ in fpga/ice40/Makefile
 
 TEXT_BASE = 0x00010000
 DATA_BASE = 0x00020000
@@ -463,8 +464,8 @@ def do_bench(board, elf, timeout):
     print(f"cycles   : {cycles}")
     print(f"retired  : {retired}")
     print(f"IPC      : {retired / cycles:.3f}")
-    print(f"at 6 MHz : {cycles / 6e6 * 1e3:.2f} ms, "
-          f"{retired / (cycles / 6e6) / 1e6:.2f} MIPS")
+    print(f"at {CLK_HZ/1e6:.0f} MHz: {cycles / CLK_HZ * 1e3:.2f} ms, "
+          f"{retired / (cycles / CLK_HZ) / 1e6:.2f} MIPS")
     return 0
 
 

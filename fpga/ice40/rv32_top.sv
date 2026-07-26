@@ -40,8 +40,8 @@
 // ---------------------------------------------------------------------------
 
 module rv32_top #(
-    parameter int CLK_FREQ  = 6000000,      // must equal the firmware's ice_fpga_init()
-    parameter int BAUD_RATE = 500000,       // exact /12 of 6 MHz -> zero baud error
+    parameter int CLK_FREQ  = 12000000,     // must equal the firmware's ice_fpga_init()
+    parameter int BAUD_RATE = 1000000,      // exact /12 of 12 MHz -> zero baud error
     parameter [31:0] RESET_PC = 32'h0001_0000,
     // Hash of the RTL sources, set by the Makefile. The protocol VERSION only
     // tracks the wire protocol, so a bitstream built from older core RTL still
