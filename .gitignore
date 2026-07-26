@@ -20,3 +20,5 @@ firmware/pico-sdk
 # Python
 .venv/
 __pycache__/
+
+formal/*/
