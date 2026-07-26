@@ -512,6 +512,9 @@ word bypassed_rd2_comb;
 // ---------------------------------------------------------------------------
 word mstatus_r, mtvec_r, mepc_r, mcause_r, mtval_r;
 
+// Machine counters. 64 bits so a long benchmark cannot wrap mid-measurement.
+logic [63:0] mcycle_r, minstret_r;
+
 localparam int MSTATUS_MIE  = 3;
 localparam int MSTATUS_MPIE = 7;
 
@@ -606,6 +609,10 @@ always_comb begin
         csr_mepc:    csr_read = mepc_r;
         csr_mcause:  csr_read = mcause_r;
         csr_mtval:   csr_read = mtval_r;
+        csr_mcycle:    csr_read = mcycle_r[31:0];
+        csr_mcycleh:   csr_read = mcycle_r[63:32];
+        csr_minstret:  csr_read = minstret_r[31:0];
+        csr_minstreth: csr_read = minstret_r[63:32];
         default:     csr_read = `word_size'd0;   // unimplemented reads as zero
     endcase
 
@@ -781,11 +788,21 @@ always_ff @(posedge clk) begin
     if (reset) begin
         executed_instruction_out.is_instruction_valid <= false;
         mstatus_r <= `word_size'd0;
+        mcycle_r   <= 64'd0;
+        minstret_r <= 64'd0;
         mtvec_r   <= `word_size'd0;
         mepc_r    <= `word_size'd0;
         mcause_r  <= `word_size'd0;
         mtval_r   <= `word_size'd0;
     end else begin
+        // Free-running machine counters. Writes to them are dropped: they are
+        // read-only here, which is permitted and keeps them off the CSR write
+        // path.
+        mcycle_r <= mcycle_r + 64'd1;
+        if (decoded_instruction_in.is_instruction_valid
+            && execute_control_signal_in.advance && !trap.taken)
+            minstret_r <= minstret_r + 64'd1;
+
         // CSR side effects commit only when the instruction itself does.
         if (decoded_instruction_in.is_instruction_valid && execute_control_signal_in.advance) begin
             if (trap.taken) begin

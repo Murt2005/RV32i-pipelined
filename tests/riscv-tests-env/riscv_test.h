@@ -21,7 +21,7 @@
 
 #define MMIO_PUTCHAR 0x0002FFF8
 #define MMIO_HALT    0x0002FFFC
-#define STACK_TOP    0x0002FFE0
+#define STACK_TOP    0x0002FFA0
 
 #define TESTNUM gp
 

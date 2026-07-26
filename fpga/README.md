@@ -119,6 +119,32 @@ garbles bytes rather than producing silence.
 
 ## Performance
 
+### Dhrystone
+
+```
+runs             : 500
+cycles           : 344004  (688 per run)
+Dhrystones/s     : 17442  at 12 MHz
+DMIPS            : 9.93
+DMIPS/MHz        : 0.827
+```
+
+`make dhrystone && python3 host/rv32_host.py --dhrystone`.
+
+The benchmark sources are copied unmodified from riscv-tests — a Dhrystone
+number is only comparable if the benchmark is. `tests/bench/dhrystone/port.c`
+supplies what this bare-metal machine lacks (`strcpy`, `putchar`, a `main`),
+and `rv_env.h` replaces the riscv-tests `util.h`. Timing comes from the
+`mcycle` CSR, which `dhrystone.h` already selects for `__riscv` — that is why
+the core now implements the machine counters.
+
+Built `-O2` with the benchmark's own no-inline pragma, which is the
+conventional Dhrystone build. For scale, published figures for soft cores on
+comparable parts run from roughly 0.25 DMIPS/MHz for a serial core up to about
+1.2 for a heavily pipelined one; this core is RV32I only, so integer multiply
+and divide go through libgcc.
+
+
 Two counters are readable as memory-mapped words while the core runs, zeroed
 each time it is released:
 

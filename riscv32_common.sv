@@ -258,6 +258,14 @@ localparam [11:0] csr_mepc    = 12'h341;
 localparam [11:0] csr_mcause  = 12'h342;
 localparam [11:0] csr_mtval   = 12'h343;
 
+// Machine counters, read-only. Software needs a cycle count to benchmark
+// itself, and rdcycle/mcycle is how it expects to get one -- Dhrystone's
+// riscv variant reads mcycle directly.
+localparam [11:0] csr_mcycle    = 12'hB00;
+localparam [11:0] csr_minstret  = 12'hB02;
+localparam [11:0] csr_mcycleh   = 12'hB80;
+localparam [11:0] csr_minstreth = 12'hB82;
+
 // Standard mcause codes for the exceptions this core can raise.
 localparam [31:0] cause_misaligned_fetch = 32'd0;
 localparam [31:0] cause_illegal_instr    = 32'd2;
