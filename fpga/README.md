@@ -38,6 +38,7 @@ python3 host/rv32_host.py --elf build/tests/isa/add_sub.elf
 python3 host/rv32_host.py --regress       # all tests, diffed against simulation
 python3 host/rv32_host.py --riscv-tests   # official rv32ui suite (make riscv-tests first)
 python3 host/rv32_diff.py --iters 200     # random programs vs the reference model
+python3 host/rv32_diff.py --stall-rate 200   # ... with the pipeline stalled most cycles
 ```
 
 After the first firmware flash you never need BOOTSEL again: opening the CDC
@@ -108,6 +109,7 @@ idle state so idle filler is harmless.
 | `G` 0x47 | go | `g` 0x67, then program output until `0x04` (EOT) |
 | `H` 0x48 | halt | `h` 0x68 |
 | `S` 0x53 | status | `s` 0x73, `{5'b0, uart_err, halted, running}` |
+| `T` 0x54 | stall injection rate: `rate[1]` | `t` 0x74 |
 
 Program output is raw bytes between the `g` and the EOT sentinel; the test
 programs emit ASCII only, so `0x04` is unambiguous.
@@ -196,6 +198,14 @@ less-than is that xor'd with both operand sign bits. `blt.S` in riscv-tests
 only uses operands in -2..1, where the subtraction can never overflow, so the
 official suite passes with the bug present. `tests/isa/branch_signed.s` now
 covers it directly.
+
+**Stall injection.** `stall` is otherwise only ever driven by transmit-queue
+backpressure, which is tied to how often the program prints and so barely
+exercises the stall/redirect interaction — precisely where the fetch bug above
+was hiding. The `T` command drives it from an LFSR instead, reseeded on every
+`G` so a failing case replays identically. Extra stall cycles are always safe:
+the queue-backpressure term is what guarantees no byte is dropped, and stalling
+more never breaks it.
 
 **Hardware and simulation must start from the same memory.** `memory.sv` zeroes
 its arrays in an `initial` block, so every simulated run begins with all-zero

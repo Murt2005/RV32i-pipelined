@@ -43,6 +43,7 @@ CMD_READ   = 0x52   # 'R' -> addr[4] len[2],  then 0x72 and len bytes
 CMD_GO     = 0x47   # 'G' -> 0x67, then program output until EOT
 CMD_HALT   = 0x48   # 'H' -> 0x68
 CMD_STATUS = 0x53   # 'S' -> 0x73, status byte
+CMD_TRATE  = 0x54   # 'T' -> rate[1],  then 0x74
 
 RSP_PING   = 0x70
 RSP_ZERO   = 0x7A
@@ -51,9 +52,10 @@ RSP_READ   = 0x72
 RSP_GO     = 0x67
 RSP_HALT   = 0x68
 RSP_STATUS = 0x73
+RSP_TRATE  = 0x74
 EOT        = 0x04
 
-PROTO_VERSION = 0x03
+PROTO_VERSION = 0x04
 
 BAUD = 500000          # must equal BAUD_RATE in fpga/ice40/Makefile
 
@@ -114,6 +116,20 @@ class Rv32Board:
         self.ser.write(bytes([CMD_HALT]))
         self.ser.flush()
         self._expect(RSP_HALT, "halt")
+
+    def set_stall_rate(self, rate):
+        """
+        Drive the core's stall input from an LFSR `rate`/256 of the time.
+
+        Normally `stall` only ever comes from transmit-queue backpressure,
+        which is tied to how often the program prints and so barely exercises
+        the stall/redirect interaction in the pipeline. 0 restores that.
+        """
+        if not 0 <= rate <= 255:
+            raise Rv32Error(f"stall rate {rate} out of range 0..255")
+        self.ser.write(bytes([CMD_TRATE, rate]))
+        self.ser.flush()
+        self._expect(RSP_TRATE, "stall rate")
 
     def resync(self):
         """

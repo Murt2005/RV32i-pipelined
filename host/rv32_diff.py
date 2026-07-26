@@ -228,16 +228,27 @@ def main():
     ap.add_argument("--length", type=int, default=120,
                     help="instructions in the random body")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--stall-rate", type=int, default=0,
+                    help="drive the core's stall input from an LFSR this often "
+                         "out of 256 (0 = only transmit-queue backpressure)")
     ap.add_argument("--save-failure", default="build/diff-failure.bin")
     args = ap.parse_args()
 
     seed = args.seed if args.seed is not None else random.randrange(1 << 30)
-    print(f"seed {seed}, {args.iters} programs of {args.length} instructions")
+    print(f"seed {seed}, {args.iters} programs of {args.length} instructions, "
+          f"stall rate {args.stall_rate}/256")
 
     try:
         board = open_board(args.port)
     except Rv32Error as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        board.set_stall_rate(args.stall_rate)
+    except Rv32Error as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        board.close()
         return 2
 
     failures = 0

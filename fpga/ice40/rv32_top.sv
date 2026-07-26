@@ -35,6 +35,7 @@
 //   'G' 0x47    go          -> 'g', then raw program output until 0x04 (EOT)
 //   'H' 0x48    halt        -> 'h'
 //   'S' 0x53    status      -> 's', {6'b0, halted, running}
+//   'T' 0x54    stall rate  -> rate[1], then 't'  (0 disables; see below)
 // ---------------------------------------------------------------------------
 
 module rv32_top #(
@@ -53,7 +54,7 @@ module rv32_top #(
 
     localparam int CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;
 
-    localparam [7:0] VERSION      = 8'h03;
+    localparam [7:0] VERSION      = 8'h04;
     localparam [7:0] EOT          = 8'h04;
     localparam [31:0] MMIO_PUTCHAR = 32'h0002_FFF8;
     localparam [31:0] MMIO_HALT    = 32'h0002_FFFC;
@@ -150,6 +151,15 @@ module rv32_top #(
     logic cpu_reset;
     logic cpu_stall;
 
+    // Stall injection. `stall` is otherwise only ever driven by transmit-queue
+    // backpressure, which is a low-entropy pattern tied to how often the
+    // program prints -- so the stall/redirect interaction in the pipeline
+    // barely gets exercised, and that is precisely where a latent fetch bug was
+    // already found. Driving it from an LFSR instead lets the differential
+    // tester hammer that interaction.
+    logic [7:0]  stall_rate;       // 0 disables; higher stalls more often
+    logic [15:0] lfsr;
+
     assign cpu_reset = rst | ~cpu_run;
 
     memory_io_req cpu_inst_req, cpu_data_req;
@@ -166,9 +176,24 @@ module rv32_top #(
         .data_mem_rsp(data_rsp)
     );
 
-    // Leave one free slot so the push that happens on the cycle the stall
-    // clears can never overflow.
-    assign cpu_stall = (txq_count >= TXQ_STALL_LVL);
+    // Free-running Galois LFSR, reseeded on every 'G' so that a given program
+    // at a given rate replays identically -- shrinking a failing case depends
+    // on that.
+    always_ff @(posedge clk) begin
+        if (rst || !cpu_run)
+            lfsr <= 16'hACE1;
+        else
+            lfsr <= lfsr[0] ? ((lfsr >> 1) ^ 16'hB400) : (lfsr >> 1);
+    end
+
+    logic stall_inject;
+    // rate 0 never fires; rate 255 still leaves lfsr[7:0] == 255 un-stalled, so
+    // the core always makes forward progress and cannot be wedged.
+    assign stall_inject = (lfsr[7:0] < stall_rate);
+
+    // Extra stall cycles are always safe: the queue-backpressure term below is
+    // what guarantees no byte is dropped, and stalling *more* never breaks it.
+    assign cpu_stall = (txq_count >= TXQ_STALL_LVL) | stall_inject;
 
     // -----------------------------------------------------------------------
     // MMIO decode (snoops the data request, exactly like the simulation top)
@@ -197,7 +222,8 @@ module rv32_top #(
         S_RD_ACK = 4'd7,    // emit 'r' before the payload so the host can sync
         S_RD_REQ = 4'd8,    // issue the word read
         S_RD_WAIT= 4'd9,    // memory response lands the next cycle
-        S_RD_PUSH= 4'd10    // hand one byte to the transmit queue
+        S_RD_PUSH= 4'd10,   // hand one byte to the transmit queue
+        S_TRATE  = 4'd11    // collect the stall-injection rate byte
     } ldr_state_t;
 
     ldr_state_t   state;
@@ -223,6 +249,7 @@ module rv32_top #(
     logic         rd_from_inst;
     logic [31:0]  rd_word;
     logic         rd_ready;
+
 
     // Loader-issued memory write, pulsed for a single cycle.
     memory_io_req ldr_req;
@@ -282,6 +309,7 @@ module rv32_top #(
             cmd_is_read   <= 1'b0;
             rd_from_inst  <= 1'b0;
             rd_word       <= 32'd0;
+            stall_rate    <= 8'd0;
             ldr_req       <= memory_io_no_req;
         end else begin
             ldr_req.valid <= 1'b0;      // single-cycle pulse
@@ -319,6 +347,9 @@ module rv32_top #(
                             8'h52: begin                 // 'R' read
                                 cmd_is_read <= 1'b1;
                                 byte_idx <= 2'd0; state <= S_ADDR;
+                            end
+                            8'h54: begin                 // 'T' stall rate
+                                state <= S_TRATE;
                             end
                             8'h47: begin                 // 'G' go
                                 cpu_run    <= 1'b1;
@@ -442,6 +473,14 @@ module rv32_top #(
                         load_len  <= load_len - 16'd1;
                         if (load_len == 16'd1) state <= S_IDLE;
                         else                   state <= S_RD_REQ;
+                    end
+                end
+
+                S_TRATE: begin
+                    if (rx_valid) begin
+                        stall_rate <= rx_data;
+                        resp0 <= 8'h74; resp_two <= 1'b0;   // 't'
+                        state <= S_RESP1;
                     end
                 end
 
