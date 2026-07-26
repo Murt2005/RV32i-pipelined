@@ -4,9 +4,11 @@ The five-stage RV32I core from this repo, running on the pico2-ice's
 iCE40UP5K. Programs are loaded over USB at run time; one bitstream runs any
 program the normal build flow produces.
 
-Status: on hardware, all 19 tests under `tests/` pass with output byte-identical
-to the Icarus simulation, all 40 official `rv32ui` riscv-tests pass, and 600
-random programs match a reference model instruction for instruction.
+Status: on hardware, all 21 tests under `tests/` pass with output byte-identical
+to the Icarus simulation, all 40 official `rv32ui` riscv-tests pass, and random
+programs match a reference model instruction for instruction — with the
+pipeline stalled pseudo-randomly as well as free-running. The core implements
+RV32I plus machine-mode CSRs and precise traps.
 
 ```
 Host PC ──USB──► RP2350 ──► iCE40UP5K
@@ -93,8 +95,8 @@ UART ends therefore derive from the same crystal and cannot drift.
 `firmware/main.c`. The baud divisor is a synthesis-time constant, so a mismatch
 garbles bytes rather than producing silence.
 
-**Utilisation** (`nextpnr --up5k --package sg48`): 3321/5280 LC (62%),
-5/30 BRAM, 4/4 SPRAM, 8.46 MHz vs a 6 MHz constraint.
+**Utilisation** (`nextpnr --up5k --package sg48`): 4246/5280 LC (80%),
+5/30 BRAM, 4/4 SPRAM, 8.0 MHz vs a 6 MHz constraint.
 
 ## Performance
 
