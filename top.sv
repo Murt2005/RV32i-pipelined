@@ -20,8 +20,16 @@
 // 0 is a pure passthrough and reproduces the single-cycle behaviour exactly.
 // Meant to be run together with stall_rate, not instead of it: the two perturb
 // different parts of the machine and the bugs are in the overlap.
-module top(input clk, input reset, input [7:0] stall_rate, input [7:0] mem_delay,
-           output logic halt);
+// sdram_words sizes the SDRAM model. The default suits the iverilog suite; the
+// Doom harness overrides it, because a WAD plus a zone heap needs tens of
+// megabytes and allocating that for every small test would be wasteful.
+module top #(
+    parameter sdram_bytes = 32'h0010_0000
+) (input clk, input reset, input [7:0] stall_rate, input [7:0] mem_delay,
+   output logic halt,
+   // A frame has been completed in the framebuffer. Brought out as a port rather
+   // than reached into, so the harness has a defined thing to watch.
+   output logic frame_done);
 
 logic [15:0] stall_lfsr;
 logic        cpu_stall;
@@ -184,6 +192,10 @@ memory_delay #(
 memory_io_req sdram_req;
 memory_io_rsp sdram_rsp;
 logic         icache_invalidate;
+logic         frame_valid;
+logic         palette_valid;
+logic [7:0]   palette_index;
+logic [23:0]  palette_rgb;
 
 // Both sides reach SDRAM through a cache, and both caches sit behind their
 // decoder so the on-chip memories keep their single-cycle paths and pay nothing
@@ -216,8 +228,17 @@ bus_arbiter sdram_arb(
     .t_req(sdram_req),  .t_rsp(sdram_rsp)
 );
 
+// Preloaded from hex like the on-chip memories, so a program too large for the
+// 64 KiB instruction memory -- which is anything with a C library in it -- can be
+// placed here and run. The files are optional: $readmemh warns and leaves the
+// array zeroed when they are absent, which is what every existing test wants.
 memory_delay #(
-    .size(32'h0010_0000)
+    .size(sdram_bytes)
+    ,.initialize_mem(true)
+    ,.byte0("sdram0.hex")
+    ,.byte1("sdram1.hex")
+    ,.byte2("sdram2.hex")
+    ,.byte3("sdram3.hex")
     ,.enable_rsp_addr(true)
     ) sdram (
     .clk(clk)
@@ -240,8 +261,18 @@ mmio mmio_m(
     .putchar_valid(putchar_valid), .putchar_data(putchar_data),
     .halt_pulse(halt_pulse),
     .tohost_valid(tohost_valid), .tohost_data(tohost_data),
-    .icache_invalidate(icache_invalidate)
+    .icache_invalidate(icache_invalidate),
+    .frame_valid(frame_valid),
+    .palette_valid(palette_valid),
+    .palette_index(palette_index),
+    .palette_rgb(palette_rgb)
 );
+
+// Palette store, read by the harness when it captures a frame. On the board this
+// becomes the VGA scanout's lookup table.
+logic [23:0] palette [0:255] /*verilator public_flat_rw*/;
+always @(posedge clk)
+    if (palette_valid) palette[palette_index] <= palette_rgb;
 
 always @(posedge clk) if (putchar_valid) $write("%c", putchar_data);
 
@@ -249,5 +280,6 @@ always @(posedge clk) if (putchar_valid) $write("%c", putchar_data);
 always @(posedge clk) if (tohost_valid) $write("\nTOHOST=%0d\n", tohost_data);
 
 assign halt = halt_pulse;
+assign frame_done = frame_valid;
 
 endmodule

@@ -58,6 +58,14 @@
 // before the core is released. Harmless when there is no cache. Placed in the
 // gap between tohost/fromhost (0xFFC0..0xFFCF) and the counters at 0xFFF0.
 `define MMIO_ICACHE_INV 32'h0002_FFD0
+// A store here says "the framebuffer holds a complete frame". Nothing in the
+// hardware needs it -- the VGA side scans out continuously -- but a simulation
+// harness has no other way to know when a frame is worth capturing, and
+// guessing from write activity would catch half-drawn ones.
+`define MMIO_FRAME      32'h0002_FFD4
+// Palette: writing {index[7:0], 8'b0, b, g, r} sets one entry. Doom changes the
+// palette for damage flashes and item pickups, so this cannot be write-once.
+`define MMIO_PALETTE    32'h0002_FFD8
 
 function automatic logic [`BUS_SEL_W-1:0] bus_decode(logic [31:0] addr);
     // Ordered most specific first: the MMIO page sits inside the data region.

@@ -40,7 +40,13 @@ module mmio(
     output logic        halt_pulse,
     output logic        tohost_valid,
     output logic [31:0] tohost_data,
-    output logic        icache_invalidate
+    output logic        icache_invalidate,
+    // A frame has been completed in the framebuffer.
+    output logic        frame_valid,
+    // Palette write: index and 24-bit colour.
+    output logic        palette_valid,
+    output logic [7:0]  palette_index,
+    output logic [23:0] palette_rgb
 );
 
 wire selected = req.valid & (is_any_byte(req.do_read) | is_any_byte(req.do_write));
@@ -79,6 +85,10 @@ always_comb begin
     tohost_valid      = is_write & (req.addr == `MMIO_TOHOST);
     tohost_data       = req.data;
     icache_invalidate = is_write & (req.addr == `MMIO_ICACHE_INV);
+    frame_valid       = is_write & (req.addr == `MMIO_FRAME);
+    palette_valid     = is_write & (req.addr == `MMIO_PALETTE);
+    palette_index     = req.data[31:24];
+    palette_rgb       = req.data[23:0];
 end
 
 always_ff @(posedge clk) begin

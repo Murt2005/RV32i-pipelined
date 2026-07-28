@@ -20,7 +20,8 @@ top the_top(
     ,.reset(reset)
     ,.stall_rate(stall_rate)
     ,.mem_delay(mem_delay)
-    ,.halt(halt));
+    ,.halt(halt)
+    ,.frame_done());
 
 always #5 clk = ~clk;
 

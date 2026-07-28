@@ -327,6 +327,140 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 	[ $$fail -eq 0 ]
 
 # --------------------------------------------------------------------
+# Programs that run from SDRAM, linked against newlib.
+#
+# Anything with a C library in it is far too large for the 64 KiB on-chip
+# instruction memory, so these link .text, .rodata, .data and .bss into SDRAM and
+# leave only a reset stub at 0x00010000. That is also what Doom will need.
+#
+# newlib rather than libmc: libmc has no malloc, no file I/O and no memcpy, and
+# its printf drops the `l` in %ld. libmc is untouched and the assembly suite
+# still uses it.
+# --------------------------------------------------------------------
+SDRAM_DIR  := tests/sdram
+SDRAM_OUT  := build/tests/sdram
+
+SDRAM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Wall \
+                -ffunction-sections -fdata-sections
+SDRAM_LDFLAGS := -m $(LDEMUL) -T $(SDRAM_DIR)/link.ld --gc-sections
+
+# newlib and libgcc for this multilib. Order matters: libc needs libgcc, and the
+# syscalls object has to come before libc so the linker resolves _write and the
+# rest from here rather than pulling in newlib's stubs.
+NEWLIB_DIR := $(shell $(CC) -march=$(MARCH) -mabi=$(MABI) -print-sysroot)/lib/rv32im/ilp32
+SDRAM_LIBS := -L$(NEWLIB_DIR) -lc -lm -L$(RISCV_LIB) -lgcc
+
+.PHONY: sdram-progs run-sdram-hello
+
+$(SDRAM_OUT)/%.o: $(SDRAM_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(SDRAM_CFLAGS) -c $< -o $@
+
+$(SDRAM_OUT)/%.o: $(SDRAM_DIR)/%.s
+	@mkdir -p $(dir $@)
+	$(AS) -march=$(MARCH) -mabi=$(MABI) -c $< -o $@
+
+$(SDRAM_OUT)/hello.elf: $(SDRAM_OUT)/boot.o $(SDRAM_OUT)/syscalls.o \
+                        $(SDRAM_OUT)/hello.o $(SDRAM_DIR)/link.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(SDRAM_LDFLAGS) -o $@ $(SDRAM_OUT)/boot.o $(SDRAM_OUT)/syscalls.o \
+		$(SDRAM_OUT)/hello.o $(SDRAM_LIBS)
+
+sdram-progs: $(SDRAM_OUT)/hello.elf
+
+# The SDRAM image needs three regions rather than two, so it does not go through
+# elftohex.sh.
+run-sdram-hello: $(SDRAM_OUT)/hello.elf $(SIM_IVERILOG)
+	python3 host/elf_to_sdram_hex.py $(SDRAM_OUT)/hello.elf .
+	./$(SIM_IVERILOG) $(SIM_ARGS)
+
+# --------------------------------------------------------------------
+# Doom.
+#
+# doomgeneric, built with CMAP256 so it keeps Doom's native 8-bit paletted
+# output instead of expanding to 32-bit ARGB. The platform layer points
+# DG_ScreenBuffer straight at the hardware framebuffer, so I_FinishUpdate's blit
+# is the only copy and the palette lookup happens in hardware rather than 64000
+# times a frame on the CPU.
+#
+# Linked like any other SDRAM program: reset stub on chip, everything else in
+# SDRAM, newlib underneath.
+# --------------------------------------------------------------------
+DOOM_DIR := tests/doom
+DOOM_SRC := $(DOOM_DIR)/src
+DOOM_OUT := build/tests/doom
+
+# The upstream object list, minus the platform backends (we supply our own) and
+# minus i_main.c, whose main() we replace.
+DOOM_NAMES := dummy am_map doomdef doomstat dstrings d_event d_items d_iwad \
+              d_loop d_main d_mode d_net f_finale f_wipe g_game hu_lib hu_stuff \
+              info i_cdmus i_endoom i_joystick i_scale i_sound i_system i_timer \
+              memio m_argv m_bbox m_cheat m_config m_controls m_fixed m_menu \
+              m_misc m_random p_ceilng p_doors p_enemy p_floor p_inter p_lights \
+              p_map p_maputl p_mobj p_plats p_pspr p_saveg p_setup p_sight \
+              p_spec p_switch p_telept p_tick p_user r_bsp r_data r_draw r_main \
+              r_plane r_segs r_sky r_things sha1 sounds statdump st_lib st_stuff \
+              s_sound tables v_video wi_stuff w_checksum w_file w_main w_wad \
+              z_zone w_file_stdc i_input i_video doomgeneric
+
+DOOM_OBJS := $(addprefix $(DOOM_OUT)/,$(addsuffix .o,$(DOOM_NAMES))) \
+             $(DOOM_OUT)/doomgeneric_rv32.o \
+             $(SDRAM_OUT)/boot.o $(SDRAM_OUT)/syscalls.o
+
+# CMAP256 selects the 8bpp path. NORMALUNIX and LINUX are what doomgeneric's own
+# ports define; they gate the POSIX-ish bits it expects to exist.
+DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 \
+               -DCMAP256 -DNORMALUNIX -DLINUX \
+               -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
+               -I$(DOOM_SRC) -ffunction-sections -fdata-sections \
+               -Wno-implicit-function-declaration -Wno-int-conversion \
+               -Wno-incompatible-pointer-types -Wno-implicit-int \
+               -Wno-return-type -Wno-builtin-declaration-mismatch
+
+.PHONY: doom doom-sim
+
+$(DOOM_OUT)/%.o: $(DOOM_SRC)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(DOOM_CFLAGS) -c $< -o $@
+
+$(DOOM_OUT)/doomgeneric_rv32.o: $(DOOM_DIR)/doomgeneric_rv32.c
+	@mkdir -p $(dir $@)
+	$(CC) $(DOOM_CFLAGS) -c $< -o $@
+
+$(DOOM_OUT)/doom.elf: $(DOOM_OBJS) $(SDRAM_DIR)/link.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(SDRAM_LDFLAGS) -o $@ $(DOOM_OBJS) $(SDRAM_LIBS)
+	@$(RISCV_PREFIX)-size $@
+
+# The flat SDRAM image the harness loads, rather than hex: a WAD is megabytes
+# and text would dominate the run.
+$(DOOM_OUT)/doom.sdram.bin: $(DOOM_OUT)/doom.elf
+	$(RISCV_PREFIX)-objcopy -O binary -j .text -j .rodata -j .data $< $@
+
+# The reset stub, which lives in on-chip instruction memory rather than SDRAM.
+# The harness has to load this too: the core resets into that memory, and
+# whatever hex files happen to be lying around otherwise decide what runs.
+$(DOOM_OUT)/doom.boot.bin: $(DOOM_OUT)/doom.elf
+	$(RISCV_PREFIX)-objcopy -O binary -j .boot $< $@
+
+doom: $(DOOM_OUT)/doom.sdram.bin $(DOOM_OUT)/doom.boot.bin
+
+# 64 MiB of SDRAM, matching the board. Doom's zone allocator takes what it is
+# given and the WAD sits above it; the iverilog suite keeps the 1 MiB default.
+build/doom/Vtop: $(RTL_CORE) $(DOOM_DIR)/doom_sim.cpp
+	@mkdir -p build/doom
+	$(VERILATOR) -O2 --cc --build --top-module top -Wno-fatal \
+		-Gsdram_bytes=67108864 \
+		--Mdir build/doom top.sv $(DOOM_DIR)/doom_sim.cpp --exe -o Vtop
+
+doom-sim: build/doom/Vtop doom
+	@mkdir -p build/doom
+	./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin $(DOOM_DIR)/doom1.wad \
+		$(DOOM_OUT)/doom.boot.bin $(DOOM_FRAMES)
+
+DOOM_FRAMES ?= 2
+
+# --------------------------------------------------------------------
 # Official riscv-tests rv32um suite (M extension).
 #
 # Built with its own -march rather than the global one, so the M tests can be

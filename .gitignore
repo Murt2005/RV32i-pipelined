@@ -29,3 +29,4 @@ build/formal/
 
 # macOS
 .DS_Store
+tests/doom/doom1.wad
