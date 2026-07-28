@@ -5,6 +5,7 @@
 `include "bus/decoder.sv"
 `include "bus/mmio.sv"
 `include "bus/arbiter.sv"
+`include "bus/icache.sv"
 `include "cpu.sv"
 
 // stall_rate drives the core's stall input from an LFSR, `stall_rate`/256 of
@@ -181,11 +182,25 @@ memory_delay #(
 // do within their 64 KiB.
 memory_io_req sdram_req;
 memory_io_rsp sdram_rsp;
+logic         icache_invalidate;
+
+// The instruction side reaches SDRAM through a cache; the data side does not
+// yet. The cache is behind the decoder on purpose, so on-chip instruction memory
+// keeps its single-cycle path and pays nothing for a lookup it does not need.
+memory_io_req ic_mem_req;
+memory_io_rsp ic_mem_rsp;
+
+icache icache_m(
+    .clk(clk), .reset(reset),
+    .invalidate(icache_invalidate),
+    .cpu_req(i_sdram_req), .cpu_rsp(i_sdram_rsp),
+    .mem_req(ic_mem_req),  .mem_rsp(ic_mem_rsp)
+);
 
 bus_arbiter sdram_arb(
     .clk(clk), .reset(reset),
     .a_req(d_sdram_req), .a_rsp(d_sdram_rsp),
-    .b_req(i_sdram_req), .b_rsp(i_sdram_rsp),
+    .b_req(ic_mem_req),  .b_rsp(ic_mem_rsp),
     .t_req(sdram_req),   .t_rsp(sdram_rsp)
 );
 
@@ -205,7 +220,6 @@ logic [7:0]  putchar_data;
 logic        halt_pulse;
 logic        tohost_valid;
 logic [31:0] tohost_data;
-logic        icache_invalidate;
 
 mmio mmio_m(
     .clk(clk), .reset(reset),

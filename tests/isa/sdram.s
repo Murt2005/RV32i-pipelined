@@ -28,6 +28,9 @@
 .set SDRAM_BASE, 0x80000000
 .set SDRAM_DATA, 0x80002000
 .set SDRAM_CODE, 0x80001000
+# Writing code through the data port leaves the instruction cache holding
+# whatever it read from those addresses before. A store here drops every line.
+.set ICACHE_INV, 0x0002FFD0
 
 .text
 
@@ -155,7 +158,13 @@ t_done:
 
 # ---------------------------------------------------------------------------
 # copy_words: a2 = source, a3 = source end, a4 = destination.
-# Clobbers a2, a4, t6.
+# Clobbers a2, a4, t5, t6.
+#
+# Invalidates the instruction cache before returning, because the whole point of
+# this routine is to write memory that will then be executed. Without it the
+# second test to load code at the same address runs the *first* test's code --
+# which is what happens if you leave it out, and the failure looks like the
+# arbiter losing data rather than a stale line.
 # ---------------------------------------------------------------------------
 copy_words:
     lw      t6, 0(a2)
@@ -163,6 +172,8 @@ copy_words:
     addi    a2, a2, 4
     addi    a4, a4, 4
     bltu    a2, a3, copy_words
+    li      t5, ICACHE_INV
+    sw      zero, 0(t5)
     ret
 
 # ---------------------------------------------------------------------------

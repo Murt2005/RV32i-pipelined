@@ -18,7 +18,7 @@
   "tests/isa/logic": 1191,
   "tests/isa/lui_auipc": 1058,
   "tests/isa/perf_counters": 1136,
-  "tests/isa/sdram": 1992,
+  "tests/isa/sdram": 2085,
   "tests/isa/shift": 984,
   "tests/isa/store_basic": 1095,
   "tests/isa/traps": 2295
