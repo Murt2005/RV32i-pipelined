@@ -51,8 +51,22 @@ one: checks
 run: checks
 	$(MAKE) -C $(CHECKDIR)/checks -j4
 
+# The eight M checks are excluded here and run by `make run-m` instead. Multiply
+# is an equivalence check between two multiplier structures, which is the hard
+# case for SMT -- yices did not return on a single step in thirty-five minutes.
+# Divide needs depth 56 for a thirty-five cycle iterative unit. See wrapper.sv.
+M_CHECKS := insn_(mul|mulh|mulhsu|mulhu|div|divu|rem|remu)_
+
 run-insn: checks
-	@cd $(CHECKDIR)/checks && for c in `ls insn_*.sby 2>/dev/null`; do \
+	@cd $(CHECKDIR)/checks && for c in `ls insn_*.sby 2>/dev/null | grep -vE '$(M_CHECKS)'`; do \
+		n=`basename $$c .sby`; printf "%-24s " $$n; \
+		sby -f $$c > /dev/null 2>&1 && echo PASS || echo FAIL; \
+	done
+
+# The expensive ones, on their own. Expect this to take hours, and expect the
+# multiply checks not to finish at all.
+run-m: checks
+	@cd $(CHECKDIR)/checks && for c in `ls insn_*.sby 2>/dev/null | grep -E '$(M_CHECKS)'`; do \
 		n=`basename $$c .sby`; printf "%-24s " $$n; \
 		sby -f $$c > /dev/null 2>&1 && echo PASS || echo FAIL; \
 	done

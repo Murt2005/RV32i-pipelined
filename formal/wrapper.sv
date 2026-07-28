@@ -48,14 +48,23 @@ module rvfi_wrapper (
     assign dmem_valid = data_req.valid;
     assign dmem_wstrb = data_req.do_write;
 
-    // On the four divide checks in checks.cfg.
+    // On the eight M checks in checks.cfg. Both halves are excluded from the
+    // default run, for different reasons, and `make run-insn` skips them.
     //
-    // The divider is iterative and takes about thirty-five cycles, so the
-    // instruction cannot retire inside the depth the other checks use, and a
-    // check that cannot reach the retirement it is asserting about passes
-    // vacuously. Their depth is raised individually, which makes them far more
-    // expensive than everything else here -- they are worth running, but not on
-    // every change.
+    // Multiply is intractable, not slow. insn_mul asks the solver to prove that
+    // this core's 33x33 signed multiplier agrees with the model's, for every
+    // operand pair -- an equivalence check between two multiplier structures,
+    // which is the textbook hard case for SAT and SMT. Measured here: yices sat
+    // on a single BMC step for over thirty-five minutes without returning.
+    // Waiting longer is not a strategy; multipliers are verified by dedicated
+    // equivalence checking, not by bounded model checking, and every practical
+    // core does it that way.
+    //
+    // Divide is merely expensive. The unit is iterative and takes about
+    // thirty-five cycles, so the instruction cannot retire inside the depth the
+    // other checks use, and a check that cannot reach the retirement it is
+    // asserting about passes vacuously rather than failing. Depth 56 makes them
+    // reachable and correspondingly slow.
     //
     // The divider's arithmetic does not rest on them. It has a standalone
     // testbench covering every case the spec defines as a result rather than a
