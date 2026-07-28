@@ -340,7 +340,12 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 SDRAM_DIR  := tests/sdram
 SDRAM_OUT  := build/tests/sdram
 
-SDRAM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Wall \
+# -mstrict-align is not optional on this core. RISC-V leaves misaligned access
+# implementation-defined and GCC assumes it works, so it will happily emit an
+# unaligned word load to copy a struct. This core traps instead, and mtvec is
+# zero, so the trap lands on unmapped memory and the machine wedges executing
+# illegal instructions -- a long way from the store that caused it.
+SDRAM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Wall -mstrict-align \
                 -ffunction-sections -fdata-sections
 SDRAM_LDFLAGS := -m $(LDEMUL) -T $(SDRAM_DIR)/link.ld --gc-sections
 
@@ -409,7 +414,7 @@ DOOM_OBJS := $(addprefix $(DOOM_OUT)/,$(addsuffix .o,$(DOOM_NAMES))) \
 
 # CMAP256 selects the 8bpp path. NORMALUNIX and LINUX are what doomgeneric's own
 # ports define; they gate the POSIX-ish bits it expects to exist.
-DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 \
+DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -mstrict-align \
                -DCMAP256 -DNORMALUNIX -DLINUX \
                -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
                -I$(DOOM_SRC) -ffunction-sections -fdata-sections \

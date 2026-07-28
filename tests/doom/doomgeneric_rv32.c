@@ -135,6 +135,38 @@ int main(int argc, char **argv)
     printf("WAD: %lu bytes at %p\n", (unsigned long)wad_size, wad_data);
     ramfile_register("doom1.wad", wad_data, (long)wad_size);
 
+    /* Read the WAD back through the same stdio path Doom uses and compare with
+     * the bytes we know are in memory. If this disagrees, every texture and
+     * patch Doom loads is wrong and the renderer draws noise -- which is a very
+     * confusing thing to debug from the picture alone. */
+    {
+        FILE *f = fopen("doom1.wad", "rb");
+        if (!f) {
+            printf("SELFTEST: fopen failed\n");
+        } else {
+            unsigned char buf[16];
+            const unsigned char *ref = (const unsigned char *)wad_data;
+            int bad = 0;
+
+            if (fread(buf, 1, 12, f) != 12) { printf("SELFTEST: short read\n"); bad++; }
+            for (int i = 0; i < 12; i++) if (buf[i] != ref[i]) bad++;
+            printf("SELFTEST head: %02x%02x%02x%02x expect %02x%02x%02x%02x\n",
+                   buf[0], buf[1], buf[2], buf[3], ref[0], ref[1], ref[2], ref[3]);
+
+            /* A seek to somewhere well past the first buffer, which is where a
+             * wrong buffer size shows up. */
+            long probe = 1000000;
+            fseek(f, probe, SEEK_SET);
+            if (fread(buf, 1, 16, f) != 16) { printf("SELFTEST: short read 2\n"); bad++; }
+            for (int i = 0; i < 16; i++) if (buf[i] != ref[probe + i]) bad++;
+            printf("SELFTEST @%ld: %02x%02x%02x%02x expect %02x%02x%02x%02x -> %s\n",
+                   probe, buf[0], buf[1], buf[2], buf[3],
+                   ref[probe], ref[probe+1], ref[probe+2], ref[probe+3],
+                   bad ? "MISMATCH" : "ok");
+            fclose(f);
+        }
+    }
+
     static char  arg0[] = "doom";
     static char  arg1[] = "-iwad";
     static char  arg2[] = "doom1.wad";

@@ -133,6 +133,17 @@ off_t _lseek(int fd, off_t off, int whence)
 int _fstat(int fd, struct stat *st)
 {
     int i = fd - FD_BASE;
+
+    /* Zeroed first, and st_blksize set explicitly. newlib sizes each stdio
+     * stream's buffer from st_blksize and mallocs exactly that many bytes --
+     * so leaving it as whatever was on the stack picks a random buffer size for
+     * every file opened. Doom reads its WAD through fread, so the effect is
+     * lumps that arrive shifted or truncated: the game runs, the palette is
+     * fine, and the pictures are noise. */
+    for (unsigned k = 0; k < sizeof *st; k++)
+        ((char *)st)[k] = 0;
+
+    st->st_blksize = 1024;
     st->st_mode = S_IFCHR;
     if (i >= 0 && i < MAX_FILES && files[i].open) {
         st->st_mode = S_IFREG;
