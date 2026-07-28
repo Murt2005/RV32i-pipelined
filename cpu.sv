@@ -131,6 +131,10 @@ module fetch #(
     output memory_io_req                        instruction_memory_request,
     input memory_io_rsp                         instruction_memory_response,
 
+    // Freeze the front end: a fetch is in flight and has not been answered, or
+    // one cannot be issued at all. Consumed by control.
+    output logic                                imem_wait,
+
     output fetched_instruction_t                fetched_instruction_out
 );
 
@@ -148,6 +152,50 @@ word latched_instruction_pc;
 // when nothing is latched yet (see the stall handling below).
 word issued_pc;
 bool issued_valid;
+
+// ---------------------------------------------------------------------------
+// Front-end stall for an instruction memory that does not answer in one cycle.
+//
+// Two things go wrong without it. The front end has no "this latched
+// instruction has been consumed" bit: it relies on a response arriving every
+// cycle so the bypass path overrides the latch, and the latch is re-presented
+// only for the single cycle after a stall lifts. If a response is merely late,
+// the latch is presented again and decode issues the same instruction twice.
+// And if fetch cannot issue at all, fetch_pc holds while decode keeps
+// consuming, with the same result.
+//
+// The stretch by one cycle is the subtle part. Freezing the front end destroys
+// ID/EX and relies on fetch re-presenting the latch when the freeze lifts --
+// which is only safe because a frozen fetch issues nothing, so no response can
+// arrive on the cycle it lifts. A miss breaks exactly that: the response turns
+// up on the release cycle, the bypass path forwards it, and the instruction
+// waiting in the latch is never decoded at all. Holding the stall one cycle
+// longer discards that response and re-fetches it, which costs two cycles per
+// miss and makes this behave like the external stall input -- the most heavily
+// exercised stall path in the design.
+//
+// Both terms are identically zero against a single-cycle memory that is always
+// ready, so the existing behaviour is bit-for-bit unchanged.
+// ---------------------------------------------------------------------------
+logic ifetch_outstanding;
+logic imiss_q;
+
+wire imiss = ifetch_outstanding & ~instruction_memory_response.valid;
+
+assign imem_wait = imiss | imiss_q | ~instruction_memory_response.ready;
+
+always_ff @(posedge clk) begin
+    if (reset) begin
+        ifetch_outstanding <= 1'b0;
+        imiss_q            <= 1'b0;
+    end else begin
+        if (instruction_memory_request.valid)
+            ifetch_outstanding <= 1'b1;
+        else if (instruction_memory_response.valid)
+            ifetch_outstanding <= 1'b0;
+        imiss_q <= imiss;
+    end
+end
 
 // ---------------------------------------------------------------------------
 // Branch target buffer: direct mapped, no history, predict taken on a hit.
@@ -877,7 +925,14 @@ module memory(
     input  memory_io_rsp   data_memory_response,
     input executed_instruction_t  executed_instruction_in,
     output memory_instruction_t memory_instruction_out,
-    output logic           retired
+    output logic           retired,
+
+    // Freeze the memory and writeback stages: an access has been accepted and
+    // its response has not arrived. Consumed by control.
+    output logic           dmem_wait,
+    // The access wants to go out but the target will not take it this cycle.
+    // A weaker stall -- nothing is in flight, so writeback may still drain.
+    output logic           dmem_issue_blocked
 );
 
 // One pulse per instruction leaving EX/MEM. Flushed instructions never get
@@ -888,6 +943,61 @@ assign retired = memory_control_signal_in.advance
 
 import riscv::*;
 
+// ---------------------------------------------------------------------------
+// Outstanding-access tracking.
+//
+// The request used to be gated on memory_control_signal_in.advance, which was
+// fine while every access finished in one cycle and the stage therefore always
+// advanced. Once a miss can freeze the stage, that gating would retract a
+// request mid-flight, so issue is decoupled from advance and tracked here.
+//
+// The stage issues an access exactly once, in the first cycle its occupant is
+// able to go out, and the two stall outputs below keep it there until it has.
+// There is deliberately no "already issued" flag: control freezes this stage
+// whenever an access could not be issued or is still in flight, so an occupant
+// can never advance past its own request. That is asserted rather than
+// defended against -- if some later change gates this stage for another reason,
+// the assertion fires instead of a store silently going out twice or not at all.
+// ---------------------------------------------------------------------------
+logic access_outstanding;   // accepted, response not yet returned
+
+// Clears in the same cycle the response lands, so back-to-back accesses still
+// go out one per cycle and the single-cycle case is unchanged.
+wire access_busy = access_outstanding & ~data_memory_response.valid;
+
+wire is_memory_op = executed_instruction_in.is_instruction_valid
+                  && (executed_instruction_in.instruction_opcode == q_store
+                   || executed_instruction_in.instruction_opcode == q_load
+                   || executed_instruction_in.instruction_opcode == q_amo);
+
+wire want_issue = is_memory_op & ~access_busy;
+
+// valid already carries ready, so acceptance is just the request being valid.
+wire issue_accepted = data_memory_request.valid;
+
+assign dmem_wait          = access_busy;
+assign dmem_issue_blocked = want_issue & ~data_memory_response.ready;
+
+always_ff @(posedge clk) begin
+    if (reset)
+        access_outstanding <= 1'b0;
+    else if (issue_accepted)
+        access_outstanding <= 1'b1;
+    else if (data_memory_response.valid)
+        access_outstanding <= 1'b0;
+end
+
+`ifndef SYNTHESIS
+// A memory instruction must not leave EX/MEM without having issued its access.
+// This is the property that makes the missing "already issued" flag safe, and
+// the failure it catches is a lost store, which has no other symptom.
+always @(posedge clk) begin
+    if (!reset && memory_control_signal_in.advance && is_memory_op && !issue_accepted)
+        $error("%m: memory instruction left EX/MEM without issuing (addr %08x)",
+               executed_instruction_in.writeback_instruction.wbd);
+end
+`endif
+
 // Combinational: build data memory request
 always_comb begin
     word rd2;
@@ -897,10 +1007,7 @@ always_comb begin
     rd2 = executed_instruction_in.rd2;
     data_memory_request = memory_io_no_req;
 
-    if (memory_control_signal_in.advance && executed_instruction_in.is_instruction_valid
-        && (executed_instruction_in.instruction_opcode == q_store
-         || executed_instruction_in.instruction_opcode == q_load
-         || executed_instruction_in.instruction_opcode == q_amo)) begin
+    if (want_issue && data_memory_response.ready) begin
         data_memory_request.user_tag = 0;
 
         if (executed_instruction_in.instruction_opcode == q_store) begin
@@ -981,15 +1088,24 @@ endmodule
 // Control: generates advance/flush per stage and set-PC for fetch.
 // Currently no hazard or mispredict handling; all stages always advance.
 // ---------------------------------------------------------------------------
+// Four inputs were removed from this module: both raw memory responses, the
+// fetched instruction and the memory-stage instruction. All four were declared
+// and never read. That was harmless while every stage advanced unconditionally,
+// but once fetch's and writeback's advance signals started varying, the unread
+// ports made Verilator see combinational loops through them -- fetch drives its
+// output combinationally from its own advance, so a port carrying that output
+// back into control closes a cycle even if nothing reads it.
 module control(
     input logic stall,
-    input memory_io_rsp instruction_memory_response,
-    input memory_io_rsp data_memory_response,
+    // Decoded from the memory response protocol by the stages that own it, so
+    // that it is interpreted in exactly one place each. These replace the raw
+    // responses, which this module took as inputs and never looked at.
+    input logic imem_wait,
+    input logic dmem_wait,
+    input logic dmem_issue_blocked,
     input pc_control_t pc_control_in,
-    input fetched_instruction_t fetched_instruction_in,
     input decoded_instruction_t decoded_instruction_in,
     input executed_instruction_t executed_instruction_in,
-    input memory_instruction_t memory_instruction_in,
     output stage_control_signal_t  fetch_control_signal_out,
     output stage_control_signal_t  decode_control_signal_out,
     output stage_control_signal_t  execute_control_signal_out,
@@ -1069,16 +1185,21 @@ always_comb begin
     end
 
     // ------------------------------------------------------------------
-    // 3. EXTERNAL STALL (highest priority, overrides everything above)
+    // 3. FRONT-END FREEZE (overrides everything above)
     //
-    // Backpressure from a memory-mapped peripheral that cannot accept another
-    // write yet (the board's UART transmitter). The memory_io interface has no
-    // way to express "not ready", so the front of the pipeline is frozen
-    // instead.
+    // Four sources, all with the same shape: freeze fetch, decode and execute,
+    // and let memory and writeback drain.
     //
-    // This takes exactly the same shape as the load-use stall above: freeze
-    // fetch, decode and execute, and let memory and writeback drain. Two
-    // reasons it must be this shape and not a whole-pipeline freeze:
+    //   stall               Backpressure from a memory-mapped peripheral that
+    //                       cannot accept another write yet (the board's UART
+    //                       transmitter).
+    //   imem_wait           A fetch is in flight and unanswered, or cannot be
+    //                       issued. See fetch for why this also has to cover
+    //                       the cycle the response finally arrives.
+    //   dmem_issue_blocked  The access in EX/MEM cannot be handed over yet.
+    //   dmem_wait           An accepted access has not been answered.
+    //
+    // Two reasons this shape and not a whole-pipeline freeze:
     //
     //   * Correctness. The store already in EX/MEM issues its request once and
     //     EX/MEM then takes a bubble (execute is not advancing while memory
@@ -1089,15 +1210,44 @@ always_comb begin
     //     put the peripheral's own full/empty flag on a combinational path
     //     through the whole control block and back out through the memory
     //     stage's request -- a loop through the peripheral that measured
-    //     112 ns and capped the design at 8.9 MHz.
+    //     112 ns and capped the design at 8.9 MHz. The two dmem_* signals below
+    //     do gate that advance, but they come from registered state in the
+    //     memory stage rather than from a peripheral's live request, so they do
+    //     not close that loop.
+    //
+    // Suppressing the redirect and the flush is required, not tidiness:
+    // execute is frozen, so it recomputes and reasserts the redirect when the
+    // freeze lifts. Letting it through now would apply it while fetch's realign
+    // is also running, which is the interaction that produced the recorded
+    // fetch bug.
     // ------------------------------------------------------------------
-    if (stall) begin
+    if (stall || imem_wait || dmem_issue_blocked || dmem_wait) begin
         fetch_control_signal_out.advance = false;
         decode_control_signal_out.advance = false;
         execute_control_signal_out.advance = false;
         decode_control_signal_out.flush = false;
         branch_pc_redirect_request_out.is_pc_valid = false;
     end
+
+    // ------------------------------------------------------------------
+    // 4. BACK-END FREEZE (last, so nothing above can undo it)
+    //
+    // dmem_issue_blocked holds the memory stage so its occupant cannot advance
+    // past an access it has not issued yet, but leaves writeback running: by
+    // construction nothing is in flight in that cycle, so MEM/WB may be holding
+    // a load whose response is live right now, and freezing writeback would
+    // discard it.
+    //
+    // dmem_wait holds writeback as well. That is the whole point of it --
+    // writeback reads data_memory_response combinationally, with no capture
+    // register, so a load whose response has not arrived would otherwise be
+    // marked invalid and its result dropped silently rather than waited for.
+    // ------------------------------------------------------------------
+    if (dmem_issue_blocked || dmem_wait)
+        memory_control_signal_out.advance = false;
+
+    if (dmem_wait)
+        writeback_control_signal_out.advance = false;
 end
 endmodule
 
@@ -1150,6 +1300,9 @@ stage_control_signal_t fetch_control_signal, decode_control_signal, execute_cont
 /* verilator lint_on UNOPTFLAT */
 branch_pc_redirect_request_t branch_pc_redirect_request;
 
+// Memory-protocol stalls, decoded in the stage that owns each port.
+logic imem_wait, dmem_wait, dmem_issue_blocked;
+
 fetched_instruction_t fetched_instruction;
 
 btb_update_t btb_update;
@@ -1166,6 +1319,7 @@ fetch #(
     .btb_update_in(btb_update),
     .instruction_memory_request(inst_mem_req),
     .instruction_memory_response(inst_mem_rsp),
+    .imem_wait(imem_wait),
     .fetched_instruction_out(fetched_instruction)
 );
 
@@ -1237,7 +1391,9 @@ memory memory_m(
     .data_memory_response(data_mem_rsp),
     .executed_instruction_in(executed_instruction),
     .memory_instruction_out(memory_instruction),
-    .retired(retired)
+    .retired(retired),
+    .dmem_wait(dmem_wait),
+    .dmem_issue_blocked(dmem_issue_blocked)
 );
 
 writeback writeback_m(
@@ -1251,10 +1407,18 @@ writeback writeback_m(
 // ---------------------------------------------------------------------------
 // RVFI commit record.
 //
-// An instruction is in EX/MEM for one cycle (the memory stage always advances)
-// and in MEM/WB the next, which is when its load data and write-back value are
-// available. The shadow below runs in lockstep with that, one stage behind
-// execute, so the record is assembled exactly at the commit point.
+// An instruction passes through EX/MEM and then MEM/WB, which is where its load
+// data and write-back value become available. The shadow below runs in lockstep
+// with that, one stage behind execute, so the record is assembled exactly at the
+// commit point.
+//
+// Every shadow register is gated by the same advance signal as the pipeline
+// register it shadows. That used to be unnecessary because memory and writeback
+// always advanced; now that a slow access can freeze them, an ungated shadow
+// would shift a bubble in while the real MEM/WB still held the load, and report
+// the wrong instruction with an rvfi_mem_rdata read from a response that had not
+// arrived. riscv-formal reasons only about what this port says, so that is the
+// kind of error that produces confident nonsense in both directions.
 // ---------------------------------------------------------------------------
 logic        rvfi_wb_valid, rvfi_wb_trap;
 logic [31:0] rvfi_wb_insn, rvfi_wb_pc, rvfi_wb_next_pc;
@@ -1269,28 +1433,38 @@ always_ff @(posedge clk) begin
         rvfi_wb_valid <= 1'b0;
         rvfi_order_r  <= 64'd0;
     end else begin
-        rvfi_wb_valid      <= rvfi_ex_valid;
-        rvfi_wb_trap       <= rvfi_ex_trap;
-        rvfi_wb_insn       <= rvfi_ex_insn;
-        rvfi_wb_pc         <= rvfi_ex_pc;
-        rvfi_wb_next_pc    <= rvfi_ex_next_pc;
-        rvfi_wb_rs1_addr   <= rvfi_ex_rs1_addr;
-        rvfi_wb_rs2_addr   <= rvfi_ex_rs2_addr;
-        rvfi_wb_rs1_rdata  <= rvfi_ex_rs1_rdata;
-        rvfi_wb_rs2_rdata  <= rvfi_ex_rs2_rdata;
-        // The data request is issued while the instruction is in EX/MEM, i.e.
-        // the same cycle rvfi_ex_* is presented.
-        rvfi_wb_mem_addr   <= {data_mem_req.addr[31:2], 2'b00};
-        rvfi_wb_mem_rmask  <= data_mem_req.valid ? data_mem_req.do_read  : 4'd0;
-        rvfi_wb_mem_wmask  <= data_mem_req.valid ? data_mem_req.do_write : 4'd0;
-        rvfi_wb_mem_wdata  <= data_mem_req.data;
+        // Mirrors the MEM/WB pipeline register in the memory stage exactly:
+        // loaded when the memory stage advances, cleared when it does not but
+        // writeback does.
+        if (memory_control_signal.advance) begin
+            rvfi_wb_valid      <= rvfi_ex_valid;
+            rvfi_wb_trap       <= rvfi_ex_trap;
+            rvfi_wb_insn       <= rvfi_ex_insn;
+            rvfi_wb_pc         <= rvfi_ex_pc;
+            rvfi_wb_next_pc    <= rvfi_ex_next_pc;
+            rvfi_wb_rs1_addr   <= rvfi_ex_rs1_addr;
+            rvfi_wb_rs2_addr   <= rvfi_ex_rs2_addr;
+            rvfi_wb_rs1_rdata  <= rvfi_ex_rs1_rdata;
+            rvfi_wb_rs2_rdata  <= rvfi_ex_rs2_rdata;
+            // Sampled on the cycle the instruction leaves EX/MEM, which is
+            // exactly the cycle its request is on the wire -- the memory stage
+            // asserts that it cannot advance without having issued.
+            rvfi_wb_mem_addr   <= {data_mem_req.addr[31:2], 2'b00};
+            rvfi_wb_mem_rmask  <= data_mem_req.valid ? data_mem_req.do_read  : 4'd0;
+            rvfi_wb_mem_wmask  <= data_mem_req.valid ? data_mem_req.do_write : 4'd0;
+            rvfi_wb_mem_wdata  <= data_mem_req.data;
+        end else if (writeback_control_signal.advance)
+            rvfi_wb_valid <= 1'b0;
 
         if (rvfi_valid)
             rvfi_order_r <= rvfi_order_r + 64'd1;
     end
 end
 
-assign rvfi_valid      = rvfi_wb_valid;
+// The instruction commits on the cycle it actually leaves MEM/WB. Without the
+// advance qualifier a held instruction would be reported once per stalled cycle,
+// which breaks rvfi_order uniqueness and the pc-chain checks at once.
+assign rvfi_valid      = rvfi_wb_valid & writeback_control_signal.advance;
 assign rvfi_order      = rvfi_order_r;
 assign rvfi_insn       = rvfi_wb_insn;
 assign rvfi_trap       = rvfi_wb_trap;
@@ -1319,13 +1493,12 @@ assign rvfi_mem_wdata  = rvfi_wb_mem_wdata;
 
 control control_m(
     .stall(stall),
-    .instruction_memory_response(inst_mem_rsp),
-    .data_memory_response(data_mem_rsp),
+    .imem_wait(imem_wait),
+    .dmem_wait(dmem_wait),
+    .dmem_issue_blocked(dmem_issue_blocked),
     .pc_control_in(pc_control),
-    .fetched_instruction_in(fetched_instruction),
     .decoded_instruction_in(decoded_instruction),
     .executed_instruction_in(executed_instruction),
-    .memory_instruction_in(memory_instruction),
     .fetch_control_signal_out(fetch_control_signal),
     .decode_control_signal_out(decode_control_signal),
     .execute_control_signal_out(execute_control_signal),
