@@ -1334,6 +1334,74 @@ control control_m(
     .branch_pc_redirect_request_out(branch_pc_redirect_request)
 );
 
+`ifndef SYNTHESIS
+// ---------------------------------------------------------------------------
+// memory_io protocol checks.
+//
+// These pin down the assumptions the pipeline currently makes about memory,
+// which until now were only true by accident of both targets answering in
+// exactly one cycle and never refusing a request. A cache backed by external
+// memory does neither, so the assumptions have to be visible before they are
+// changed -- otherwise the way they break is silent: a load whose response
+// arrives late is not stalled on, it is *dropped* (see writeback, which ands
+// is_instruction_valid with data_memory_response.valid), and the instruction
+// simply never writes back.
+//
+// Written as procedural checks rather than concurrent assertions so they run
+// under Icarus as well as Verilator. Compiled out of the synthesised build.
+// ---------------------------------------------------------------------------
+logic chk_data_outstanding;
+logic chk_inst_outstanding;
+
+wire chk_data_accept = data_mem_req.valid & data_mem_rsp.ready;
+wire chk_inst_accept = inst_mem_req.valid & inst_mem_rsp.ready;
+
+always_ff @(posedge clk) begin
+    if (reset) begin
+        // Still track acceptances during reset. fetch's request valid is not
+        // gated on reset (see fetch: it is gated on the response's ready and on
+        // advance), so a fetch issued in the last reset cycle is answered in the
+        // first cycle after it -- and the memory, which has no reset input, is
+        // right to answer it.
+        chk_data_outstanding <= chk_data_accept;
+        chk_inst_outstanding <= chk_inst_accept;
+    end else begin
+        // One outstanding access per port. user_tag exists to lift this, but
+        // nothing drives it yet, so a second request in flight would make the
+        // two responses indistinguishable.
+        if (chk_data_accept && chk_data_outstanding && !data_mem_rsp.valid)
+            $error("%m: second data request issued while one is still in flight (addr %08x)",
+                   data_mem_req.addr);
+        if (chk_inst_accept && chk_inst_outstanding && !inst_mem_rsp.valid)
+            $error("%m: second instruction fetch issued while one is still in flight (addr %08x)",
+                   inst_mem_req.addr);
+
+        // A response with nothing outstanding means the target answered a
+        // request that was never accepted, or answered one request twice.
+        if (data_mem_rsp.valid && !chk_data_outstanding)
+            $error("%m: data response with no request outstanding (addr %08x)",
+                   data_mem_rsp.addr);
+        if (inst_mem_rsp.valid && !chk_inst_outstanding)
+            $error("%m: instruction response with no request outstanding (addr %08x)",
+                   inst_mem_rsp.addr);
+
+        chk_data_outstanding <= chk_data_accept | (chk_data_outstanding & ~data_mem_rsp.valid);
+        chk_inst_outstanding <= chk_inst_accept | (chk_inst_outstanding & ~inst_mem_rsp.valid);
+    end
+
+    // The one that matters most. A load leaving MEM/WB must have its data in
+    // the same cycle, because writeback reads data_memory_response live -- there
+    // is no capture register. If the response is not there, the load is silently
+    // discarded rather than waited for. This is the exact failure a multi-cycle
+    // memory introduces, and it produces wrong answers with no other symptom.
+    if (!reset && writeback_control_signal.advance
+        && memory_instruction.is_instruction_valid
+        && memory_instruction.instruction_opcode == q_load
+        && !data_mem_rsp.valid)
+        $error("%m: load retiring from MEM/WB with no data response -- result dropped");
+end
+`endif
+
 endmodule
 
 `endif

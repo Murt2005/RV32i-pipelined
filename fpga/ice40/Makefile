@@ -30,6 +30,12 @@ SV_SRC     := $(TOP).sv uart.sv memory_spram.sv \
 
 INC        := -I$(ROOT) -I.
 
+# The RTL carries simulation-only protocol checkers behind `ifndef SYNTHESIS.
+# Nothing defines it for us -- sv2v and yosys both leave it undefined -- so
+# without this the checkers' state and comparators are synthesised into a design
+# that is already at 93% LC.
+DEFS       := -DSYNTHESIS
+
 DFU_VID_PID := 1209:b1c0
 
 .PHONY: all prog clean stat util time lint sim
@@ -41,7 +47,7 @@ $(BUILD)/$(TOP).v: $(TOP).sv uart.sv memory_spram.sv $(ROOT)/cpu.sv \
                    $(ROOT)/riscv32_common.sv $(ROOT)/memory_io.sv \
                    $(ROOT)/base.sv $(ROOT)/system.sv $(ROOT)/riscv.sv
 	@mkdir -p $(BUILD)
-	sv2v $(INC) --write=$@ $(TOP).sv
+	sv2v $(INC) $(DEFS) --write=$@ $(TOP).sv
 
 # ---- 2. synthesis ---------------------------------------------------------
 $(BUILD)/$(TOP).json: $(BUILD)/$(TOP).v

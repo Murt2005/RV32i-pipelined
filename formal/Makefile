@@ -14,9 +14,12 @@ BASEDIR  := rf
 CORE     := rv32
 CHECKDIR := $(BASEDIR)/cores/$(CORE)
 
+# SYNTHESIS drops the core's simulation-only memory_io protocol checkers. They
+# are $error-based, which means nothing to a solver, and their state would only
+# widen the search space -- the formal checks make the stronger statement anyway.
 SV2V_DEFS := -DRVFI -DRISCV_FORMAL -DRISCV_FORMAL_NRET=1 \
              -DRISCV_FORMAL_XLEN=32 -DRISCV_FORMAL_ILEN=32 \
-             -DRISCV_FORMAL_ALIGNED_MEM
+             -DRISCV_FORMAL_ALIGNED_MEM -DSYNTHESIS
 SV2V_INC  := -I$(ROOT) -I. -Iriscv-formal/checks
 
 .PHONY: checks run run-insn list clean one
