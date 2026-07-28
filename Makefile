@@ -93,6 +93,41 @@ run-tests-iverilog: $(TOOLS) $(SIM_IVERILOG)
 	done
 
 
+# --------------------------------------------------------------------
+# Cycle-count gate.
+#
+# Several changes on the way to a cache-backed memory are supposed to be
+# *invisible* while the memory still answers in one cycle -- decoupling the
+# memory stage's request generation from its advance signal, for instance,
+# introduces stall conditions that a single-cycle memory can never assert. So
+# every test must take exactly the same number of cycles as before, and a delta
+# is the cheapest available signal that the fast path was perturbed. It shows up
+# well before any test starts failing.
+#
+#   make cycle-baseline     # record, before the change
+#   make cycle-check        # compare, after it; non-zero exit on any delta
+# --------------------------------------------------------------------
+CYCLE_DIR := build/cycles
+CYCLE_SUITES := directed:run-tests-iverilog \
+                rv32ui:run-riscv-tests-iverilog \
+                rv32ui-p:run-riscv-tests-p-iverilog
+
+.PHONY: cycle-baseline cycle-check
+
+cycle-baseline: MODE := --save
+cycle-check:    MODE := --compare
+cycle-baseline cycle-check:
+	@mkdir -p $(CYCLE_DIR); rc=0; \
+	for s in $(CYCLE_SUITES); do \
+		name=$${s%%:*}; target=$${s#*:}; \
+		echo "===== $$name ====="; \
+		$(MAKE) --no-print-directory $$target > $(CYCLE_DIR)/$$name.log 2>&1 \
+			|| { echo "  suite FAILED -- see $(CYCLE_DIR)/$$name.log"; rc=1; continue; }; \
+		python3 host/cycle_report.py $(MODE) $(CYCLE_DIR)/$$name.json \
+			$(CYCLE_DIR)/$$name.log || rc=1; \
+	done; \
+	exit $$rc
+
 result-verilator: top.sv verilator_top.cpp cpu.sv test
 	 $(VERILATOR) -O0 --cc --build --top-module top top.sv verilator_top.cpp --exe
 	 cp obj_dir/Vtop ./result-verilator
@@ -142,9 +177,11 @@ run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
 		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
-		out=`./$(SIM_IVERILOG) +stallrate=$(STALL_RATE) 2>/dev/null | grep -E '^(PASS|FAIL)'`; \
+		raw=`./$(SIM_IVERILOG) +stallrate=$(STALL_RATE) 2>/dev/null`; \
+		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
+		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "PASS" ]; then \
-			pass=$$((pass+1)); echo "PASS rv32ui-$$t"; \
+			pass=$$((pass+1)); echo "PASS rv32ui-$$t  finish=$$cyc"; \
 		else \
 			fail=$$((fail+1)); echo "FAIL rv32ui-$$t  ($$out)"; \
 		fi; \
@@ -173,9 +210,11 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
 		/bin/bash ./elftohex.sh build/riscv-tests-p/$$t.elf . >/dev/null 2>&1; \
-		out=`./$(SIM_IVERILOG) +stallrate=$(STALL_RATE) 2>/dev/null | grep -oE 'TOHOST=[0-9]+' | head -1`; \
+		raw=`./$(SIM_IVERILOG) +stallrate=$(STALL_RATE) 2>/dev/null`; \
+		out=`echo "$$raw" | grep -oE 'TOHOST=[0-9]+' | head -1`; \
+		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "TOHOST=1" ]; then \
-			pass=$$((pass+1)); echo "PASS rv32ui-p-$$t"; \
+			pass=$$((pass+1)); echo "PASS rv32ui-p-$$t  finish=$$cyc"; \
 		else \
 			fail=$$((fail+1)); echo "FAIL rv32ui-p-$$t  ($$out)"; \
 		fi; \
