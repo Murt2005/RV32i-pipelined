@@ -10,6 +10,7 @@ logic clk = 0;
 logic reset = 1;
 logic halt;
 logic [7:0] stall_rate = 8'd0;
+logic [7:0] mem_delay = 8'd0;
 
 integer max_cycles;
 integer cycles = 0;
@@ -18,6 +19,7 @@ top the_top(
     .clk(clk)
     ,.reset(reset)
     ,.stall_rate(stall_rate)
+    ,.mem_delay(mem_delay)
     ,.halt(halt));
 
 always #5 clk = ~clk;
@@ -44,6 +46,14 @@ initial begin
     // Stall the pipeline pseudo-randomly:  ./result-iverilog +stallrate=128
     if (!$value$plusargs("stallrate=%d", stall_rate))
         stall_rate = 8'd0;
+
+    // Make both memories answer late, by 0..N extra cycles drawn per access:
+    //   ./result-iverilog +memlatency=8
+    // 0 is a passthrough and reproduces the single-cycle memory exactly. Note a
+    // program takes many more cycles with this on, so the watchdog above needs
+    // raising for anything but short tests.
+    if (!$value$plusargs("memlatency=%d", mem_delay))
+        mem_delay = 8'd0;
 
     reset = 1;
     #16 reset = 0;

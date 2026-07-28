@@ -10,8 +10,17 @@ LD=$(RISCV_PREFIX)-ld
 # drift apart. -mabi is now explicit everywhere: it is the default for rv32i so
 # omitting it happened to work, but RISCV_LIB points at one specific multilib
 # directory and the two have to agree.
+# GCC 15 defaults to C23, where bool/true/false are keywords -- and libmc/base.h
+# has `typedef unsigned int bool`, which C23 rejects outright. Pinning the
+# standard keeps this legacy C compiling with exactly the semantics it was
+# written against, including a 4-byte bool, rather than quietly changing type
+# sizes underneath it. libmc/Makefile already pins gnu99 for the same reason.
+# Nothing caught this until a C program was built, because every test in the
+# regression suite is hand-written assembly.
+CSTD=-std=gnu17
+
 SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
-CCFLAGS=-march=$(MARCH) -mabi=$(MABI) -Wno-builtin-declaration-mismatch -Ilibmc
+CCFLAGS=-march=$(MARCH) -mabi=$(MABI) $(CSTD) -Wno-builtin-declaration-mismatch -Ilibmc
 LDFLAGS=-m $(LDEMUL) --script ld.script
 LDPOSTFLAGS= -Llibmc -lmc  -Llibmc -lmc -L$(RISCV_LIB) -lgcc
 TOOLS=dumphex
@@ -33,6 +42,22 @@ SIM_IVERILOG := build/sim/result-iverilog
 # Pipeline stall rate out of 256 for simulation runs; 0 disables.
 #   make run-tests-iverilog STALL_RATE=128
 STALL_RATE ?= 0
+
+# Extra memory latency, 0..N cycles drawn per access; 0 is a single-cycle
+# memory and reproduces the original behaviour exactly.
+#   make run-tests-iverilog MEM_LATENCY=8
+# Worth running together with STALL_RATE rather than instead of it -- the two
+# perturb different parts of the machine and the interesting bugs are where they
+# overlap.
+MEM_LATENCY ?= 0
+
+# Simulator watchdog in cycles. Matches itop.sv's own default, but has to be
+# raised when the memory is slowed down: at MEM_LATENCY=16 a directed test takes
+# ~85x the cycles it does at 0, so the default turns a passing run into a
+# timeout that looks like a hang.
+SIM_TIMEOUT ?= 120000
+
+SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_TIMEOUT)
 
 .PHONY: run-tests-iverilog run-one-iverilog run-legacy-iverilog
 
@@ -61,13 +86,21 @@ test: $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LIBS) $(TOOLS)
 	$(LD) $(LDFLAGS) -o test $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LDPOSTFLAGS)
 	/bin/bash ./elftohex.sh test .
 
-$(SIM_IVERILOG): itop.sv top.sv cpu.sv memory.sv memory_io.sv riscv.sv riscv32_common.sv base.sv system.sv
+# Every RTL file the simulator pulls in, in one list. It was previously spelled
+# out per target and had already fallen behind -- a missing entry means make
+# reports "up to date" and silently runs the old binary, which looks exactly like
+# the edit having no effect.
+RTL_CORE := top.sv cpu.sv memory.sv memory_delay.sv memory_io.sv \
+            riscv.sv riscv32_common.sv base.sv system.sv
+RTL_SRC  := itop.sv $(RTL_CORE)
+
+$(SIM_IVERILOG): $(RTL_SRC)
 	mkdir -p $(dir $@)
 	$(IVERILOG) -g2012 -o $@ itop.sv
 
 # Same design with the RVFI commit port enabled. Separate binary so the normal
 # simulator, and the synthesised build, carry none of the instrumentation.
-build/sim/result-rvfi: itop.sv top.sv cpu.sv memory.sv memory_io.sv riscv.sv riscv32_common.sv base.sv system.sv
+build/sim/result-rvfi: $(RTL_SRC)
 	mkdir -p $(dir $@)
 	$(IVERILOG) -g2012 -DRVFI -o $@ itop.sv
 
@@ -82,7 +115,7 @@ run-one-iverilog: $(TOOLS) $(SIM_IVERILOG)
 	/bin/bash ./elftohex.sh build/tests/$(TEST_STEM).elf .
 	mkdir -p build/hex/$(TEST_STEM)
 	cp code0.hex code1.hex code2.hex code3.hex data0.hex data1.hex data2.hex data3.hex build/hex/$(TEST_STEM)/
-	./$(SIM_IVERILOG) +stallrate=$(STALL_RATE)
+	./$(SIM_IVERILOG) $(SIM_ARGS)
 
 # Friendly per-test targets, e.g. run-test-isa-add_sub-iverilog
 run-test-%-iverilog: $(TOOLS) $(SIM_IVERILOG)
@@ -138,8 +171,46 @@ cycle-baseline cycle-check:
 	done; \
 	exit $$rc
 
-result-verilator: top.sv verilator_top.cpp cpu.sv test
-	 $(VERILATOR) -O0 --cc --build --top-module top top.sv verilator_top.cpp --exe
+# --------------------------------------------------------------------
+# Memory-latency sweep.
+#
+# Runs the directed suite against memories that answer late, then again with
+# external stall injection on top. Both perturbations are needed: the front end's
+# instruction-miss handling and the memory stage's outstanding-access tracking
+# are unreachable with a single-cycle memory, and their failure mode is a
+# silently skipped instruction -- no assertion, no timeout, just a program that
+# executes garbage.
+#
+#   make latency-sweep
+# --------------------------------------------------------------------
+# The watchdog is scaled per run rather than just set huge, so a genuine hang
+# still fails in seconds instead of grinding through millions of cycles.
+LATENCIES := 1 2 4 8 16
+
+.PHONY: latency-sweep
+latency-sweep: $(TOOLS) $(SIM_IVERILOG)
+	@mkdir -p build; rc=0; \
+	run() { \
+		printf '%-32s ' "$$1"; \
+		$(MAKE) --no-print-directory run-tests-iverilog \
+			MEM_LATENCY=$$2 STALL_RATE=$$3 SIM_TIMEOUT=$$4 > "build/$$5" 2>&1 \
+			&& ! grep -qE 'FAIL|ERROR|TIMEOUT' "build/$$5" \
+			&& echo ok || { echo "FAILED -- build/$$5"; rc=1; }; \
+	}; \
+	for d in $(LATENCIES); do \
+		run "MEM_LATENCY=$$d" $$d 0 $$((150000 * ($$d + 1))) "latency-$$d.log"; \
+	done; \
+	run "MEM_LATENCY=8 STALL_RATE=128" 8 128 4000000 "latency-8-stall.log"; \
+	exit $$rc
+
+# -Wno-fatal for the same reason the coverage build has it: Verilator reports
+# circular combinational logic through the control block's advance signals, which
+# is a false positive at struct granularity -- it merges every field of
+# stage_control_signal_t into one node. The loop predates all of this and the
+# declarations in `core` already carry a lint_off for it. Without the flag this
+# target simply fails to build, which is how it had been sitting.
+result-verilator: $(RTL_CORE) verilator_top.cpp test
+	 $(VERILATOR) -O0 --cc --build --top-module top -Wno-fatal top.sv verilator_top.cpp --exe
 	 cp obj_dir/Vtop ./result-verilator
 	 rm -rf obj_dir
 	 ./result-verilator
@@ -187,7 +258,7 @@ run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
 		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
-		raw=`./$(SIM_IVERILOG) +stallrate=$(STALL_RATE) 2>/dev/null`; \
+		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "PASS" ]; then \
@@ -220,7 +291,7 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
 		/bin/bash ./elftohex.sh build/riscv-tests-p/$$t.elf . >/dev/null 2>&1; \
-		raw=`./$(SIM_IVERILOG) +stallrate=$(STALL_RATE) 2>/dev/null`; \
+		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		out=`echo "$$raw" | grep -oE 'TOHOST=[0-9]+' | head -1`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "TOHOST=1" ]; then \
@@ -244,7 +315,7 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 # --------------------------------------------------------------------
 DHRY_DIR  := tests/bench/dhrystone
 DHRY_OUT  := build/tests/bench/dhrystone
-DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) -O2 -Ilibmc -I$(DHRY_DIR) \
+DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Ilibmc -I$(DHRY_DIR) \
               -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
               -Wno-implicit-int -Wno-return-type
 DHRY_OBJS := $(DHRY_OUT)/start.o $(DHRY_OUT)/dhrystone.o \
@@ -261,7 +332,7 @@ $(DHRY_OUT)/%.o: $(DHRY_DIR)/%.c $(DHRY_DIR)/dhrystone.h $(DHRY_DIR)/rv_env.h
 	$(CC) $(DHRY_FLAGS) -c $< -o $@
 
 $(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) tests/bench/link.ld
-	$(LD) --script tests/bench/link.ld -o $@ $(DHRY_OBJS) $(LDPOSTFLAGS)
+	$(LD) -m $(LDEMUL) --script tests/bench/link.ld -o $@ $(DHRY_OBJS) $(LDPOSTFLAGS)
 
 dhrystone: $(DHRY_OUT)/dhrystone.elf
 
@@ -270,8 +341,7 @@ dhrystone: $(DHRY_OUT)/dhrystone.elf
 # --------------------------------------------------------------------
 .PHONY: coverage
 
-build/cov/Vtop: top.sv cpu.sv memory.sv memory_io.sv riscv.sv riscv32_common.sv \
-                base.sv system.sv verilator_top.cpp
+build/cov/Vtop: $(RTL_CORE) verilator_top.cpp
 	mkdir -p build/cov
 	$(VERILATOR) -O0 --cc --build --top-module top --coverage \
 		--Mdir build/cov -Wno-fatal top.sv verilator_top.cpp --exe \
@@ -287,6 +357,9 @@ coverage: build/cov/Vtop $(TOOLS) riscv-tests
 			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
 		RV32_STALL_RATE=128 \
 		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`-stall.dat \
+			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
+		RV32_MEM_LATENCY=4 RV32_STALL_RATE=128 RV32_MAX_CYCLES=20000000 \
+		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`-lat.dat \
 			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
 	done; \
 	for t in $(RVTESTS); do \
