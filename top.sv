@@ -6,6 +6,7 @@
 `include "bus/mmio.sv"
 `include "bus/arbiter.sv"
 `include "bus/icache.sv"
+`include "bus/dcache.sv"
 `include "cpu.sv"
 
 // stall_rate drives the core's stall input from an LFSR, `stall_rate`/256 of
@@ -184,11 +185,16 @@ memory_io_req sdram_req;
 memory_io_rsp sdram_rsp;
 logic         icache_invalidate;
 
-// The instruction side reaches SDRAM through a cache; the data side does not
-// yet. The cache is behind the decoder on purpose, so on-chip instruction memory
-// keeps its single-cycle path and pays nothing for a lookup it does not need.
-memory_io_req ic_mem_req;
-memory_io_rsp ic_mem_rsp;
+// Both sides reach SDRAM through a cache, and both caches sit behind their
+// decoder so the on-chip memories keep their single-cycle paths and pay nothing
+// for a lookup they do not need.
+//
+// The two caches are not coherent with each other and are not meant to be. The
+// data side writes through, so memory is always current; what goes stale is the
+// instruction side's copy of anything the data side wrote -- which is exactly
+// what a loader does, and exactly what the invalidate register is for.
+memory_io_req ic_mem_req, dc_mem_req;
+memory_io_rsp ic_mem_rsp, dc_mem_rsp;
 
 icache icache_m(
     .clk(clk), .reset(reset),
@@ -197,11 +203,17 @@ icache icache_m(
     .mem_req(ic_mem_req),  .mem_rsp(ic_mem_rsp)
 );
 
+dcache dcache_m(
+    .clk(clk), .reset(reset),
+    .cpu_req(d_sdram_req), .cpu_rsp(d_sdram_rsp),
+    .mem_req(dc_mem_req),  .mem_rsp(dc_mem_rsp)
+);
+
 bus_arbiter sdram_arb(
     .clk(clk), .reset(reset),
-    .a_req(d_sdram_req), .a_rsp(d_sdram_rsp),
-    .b_req(ic_mem_req),  .b_rsp(ic_mem_rsp),
-    .t_req(sdram_req),   .t_rsp(sdram_rsp)
+    .a_req(dc_mem_req), .a_rsp(dc_mem_rsp),
+    .b_req(ic_mem_req), .b_rsp(ic_mem_rsp),
+    .t_req(sdram_req),  .t_rsp(sdram_rsp)
 );
 
 memory_delay #(

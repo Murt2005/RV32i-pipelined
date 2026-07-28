@@ -87,6 +87,22 @@ logic             look_valid;
 
 wire hit = look_valid & (look_tag == pend_tag);
 
+// Zeroed for the same reason memory.sv zeroes its arrays: an uninitialised RAM
+// reads as X, and X does not stay put. rvfi_mem_rdata samples the data response
+// unconditionally, so a single X word turns the commit record into "xxxxxxxx"
+// and the cross-check dies parsing it rather than reporting a mismatch.
+initial begin
+    for (int k = 0; k < sets*line_words; k++) data_ram[k] = 32'd0;
+    for (int k = 0; k < sets; k++) begin
+        tag_ram[k]   = '0;
+        valid_ram[k] = 1'b0;
+    end
+    look_data  = 32'd0;
+    look_tag   = '0;
+    look_valid = 1'b0;
+end
+
+
 // ready is built only from registers -- never from the request. Making it depend
 // on the address would put the initiator's valid and this target's ready in a
 // combinational cycle; see the note in bus/decoder.sv. `hit` qualifies, since
