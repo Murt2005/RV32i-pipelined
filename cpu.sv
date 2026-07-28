@@ -2,6 +2,7 @@
 `define __cpu_sv
 
 `include "riscv.sv"
+`include "divider.sv"
 
 // Request to set a new fetch PC (on branch/jump or mispredict)
 typedef struct packed {
@@ -525,7 +526,11 @@ module execute(
     output executed_instruction_t executed_instruction_out,
 
     output pc_control_t pc_control_out,
-    output btb_update_t btb_update_out
+    output btb_update_t btb_update_out,
+
+    // Freeze the front end while the iterative divider runs. Consumed by
+    // control, and shaped exactly like the load-use stall.
+    output logic div_wait
 `ifdef RVFI
     // Everything RVFI needs about the instruction leaving execute. Guarded
     // because carrying it through the real pipeline registers would cost more
@@ -551,6 +556,83 @@ word next_pc_comb;
 bool mispredict;
 word bypassed_rd1_comb;
 word bypassed_rd2_comb;
+
+// ---------------------------------------------------------------------------
+// M extension, divide half.
+//
+// Multiply is combinational in the ALU; only divide is iterative, because it is
+// rare enough that a fast divider would be area spent for nothing.
+//
+// The handshake has to survive this pipeline's replay behaviour. Freezing the
+// front end clears ID/EX, so the divide instruction disappears from decode
+// while the unit is running and is re-decoded from the fetch latch once the
+// freeze lifts -- the same mechanism the load-use stall relies on. That is why
+// the stall is held by the unit's own `busy` rather than by the instruction
+// being present, and why the result is parked in `done` until the instruction
+// comes back around to collect it.
+//
+// Nothing can flush the divide while it is in flight: the front end is frozen,
+// so execute sees a bubble and can raise neither a redirect nor a trap, and
+// division has no architectural exception of its own.
+//
+// That argument is about *synchronous* control flow only, and interrupts are not
+// synchronous. When mtime/mip land, an interrupt taken between the unit
+// finishing and the instruction returning to collect would strand the result,
+// and the next divide would take it. The assertion below turns that into a loud
+// failure rather than a wrong answer, but the handshake will need revisiting.
+// ---------------------------------------------------------------------------
+`ifndef ext_m_disable
+wire is_div_op = decoded_instruction_in.is_instruction_valid
+              && (decoded_instruction_in.instruction_opcode == q_op)
+              && (decoded_instruction_in.f7 == f7_ext_mul)
+              && decoded_instruction_in.f3[2];      // 4..7 are DIV/DIVU/REM/REMU
+
+logic        div_busy, div_done;
+word         div_result;
+
+wire div_start = is_div_op & ~div_busy & ~div_done;
+wire div_take  = is_div_op &  div_done & execute_control_signal_in.advance;
+
+assign div_wait = (is_div_op & ~div_done) | div_busy;
+
+divider divider_m(
+    .clk(clk),
+    .reset(reset),
+    .start(div_start),
+    .dividend(bypassed_rd1_comb),
+    .divisor(bypassed_rd2_comb),
+    .is_signed(~decoded_instruction_in.f3[0]),      // DIV/REM signed, *U not
+    .want_rem(decoded_instruction_in.f3[1]),        // REM/REMU rather than DIV
+    .busy(div_busy),
+    .done(div_done),
+    .take(div_take),
+    .result(div_result)
+);
+
+`ifndef SYNTHESIS
+// A parked result must be collected promptly. If it is not, the instruction it
+// belongs to was lost, and the next divide would silently take this answer.
+integer div_park;
+always @(posedge clk) begin
+    if (reset || !div_done)      div_park <= 0;
+    else if (div_done)           div_park <= div_park + 1;
+    // Generous: a slow memory can freeze execute for many cycles before the
+    // owning instruction gets to collect, so this only catches a true leak.
+    if (div_park > 256)
+        $error("%m: divider result parked for %0d cycles -- owner never returned",
+               div_park);
+end
+`endif
+`else
+// M disabled for this build: no divider, and the front end never waits on one.
+// The ALU's multiply is compiled out to match (see riscv32_common.sv), so an M
+// instruction decodes as whatever its funct3 means in the base ISA -- the same
+// thing this core did before the extension existed.
+wire                  is_div_op  = 1'b0;
+wire                  div_done   = 1'b0;
+wire [`word_size-1:0] div_result = '0;
+assign div_wait = 1'b0;
+`endif
 
 // ---------------------------------------------------------------------------
 // Machine-mode CSR file. Lives in execute because that is where CSR
@@ -694,6 +776,12 @@ always_comb begin
         decoded_instruction_in.instruction_opcode,
         decoded_instruction_in.f3,
         decoded_instruction_in.f7);
+
+    // DIV/DIVU/REM/REMU come from the iterative unit instead. The ALU produced
+    // zero for them above; substituting here keeps the divider out of that
+    // function, which is shared with the formal model and wants to stay pure.
+    if (is_div_op && div_done)
+        execute_result_comb = {1'b0, div_result};
 
     // ---------------------------------------------------------------
     // Exceptions
@@ -1103,6 +1191,7 @@ module control(
     input logic imem_wait,
     input logic dmem_wait,
     input logic dmem_issue_blocked,
+    input logic div_wait,
     input pc_control_t pc_control_in,
     input decoded_instruction_t decoded_instruction_in,
     input executed_instruction_t executed_instruction_in,
@@ -1198,6 +1287,8 @@ always_comb begin
     //                       the cycle the response finally arrives.
     //   dmem_issue_blocked  The access in EX/MEM cannot be handed over yet.
     //   dmem_wait           An accepted access has not been answered.
+    //   div_wait            The iterative divider is running, or has an
+    //                       instruction that has not started one yet.
     //
     // Two reasons this shape and not a whole-pipeline freeze:
     //
@@ -1221,7 +1312,7 @@ always_comb begin
     // is also running, which is the interaction that produced the recorded
     // fetch bug.
     // ------------------------------------------------------------------
-    if (stall || imem_wait || dmem_issue_blocked || dmem_wait) begin
+    if (stall || imem_wait || dmem_issue_blocked || dmem_wait || div_wait) begin
         fetch_control_signal_out.advance = false;
         decode_control_signal_out.advance = false;
         execute_control_signal_out.advance = false;
@@ -1302,6 +1393,8 @@ branch_pc_redirect_request_t branch_pc_redirect_request;
 
 // Memory-protocol stalls, decoded in the stage that owns each port.
 logic imem_wait, dmem_wait, dmem_issue_blocked;
+// Iterative divider holding the front end while it runs.
+logic div_wait;
 
 fetched_instruction_t fetched_instruction;
 
@@ -1364,7 +1457,8 @@ execute execute_m(
     .decoded_instruction_in(decoded_instruction),
     .executed_instruction_out(executed_instruction),
     .pc_control_out(pc_control),
-    .btb_update_out(btb_update)
+    .btb_update_out(btb_update),
+    .div_wait(div_wait)
 `ifdef RVFI
     ,.rvfi_ex_valid(rvfi_ex_valid)
     ,.rvfi_ex_insn(rvfi_ex_insn)
@@ -1496,6 +1590,7 @@ control control_m(
     .imem_wait(imem_wait),
     .dmem_wait(dmem_wait),
     .dmem_issue_blocked(dmem_issue_blocked),
+    .div_wait(div_wait),
     .pc_control_in(pc_control),
     .decoded_instruction_in(decoded_instruction),
     .executed_instruction_in(executed_instruction),

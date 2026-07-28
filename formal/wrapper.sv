@@ -48,6 +48,24 @@ module rvfi_wrapper (
     assign dmem_valid = data_req.valid;
     assign dmem_wstrb = data_req.do_write;
 
+    // On the four divide checks in checks.cfg.
+    //
+    // The divider is iterative and takes about thirty-five cycles, so the
+    // instruction cannot retire inside the depth the other checks use, and a
+    // check that cannot reach the retirement it is asserting about passes
+    // vacuously. Their depth is raised individually, which makes them far more
+    // expensive than everything else here -- they are worth running, but not on
+    // every change.
+    //
+    // The divider's arithmetic does not rest on them. It has a standalone
+    // testbench covering every case the spec defines as a result rather than a
+    // trap, both rounding directions, the wide divisors that overflow a 32-bit
+    // shifted remainder, and four hundred random pairs; the rv32um suite; and
+    // random differential testing against the reference model. What formal adds
+    // here is the handshake around it -- that a divide cannot be started twice,
+    // lost, or have its parked result collected by the wrong instruction -- and
+    // the multiply checks, which are combinational and cheap.
+
     // The depths in checks.cfg were raised to suit this. An access can now take
     // two cycles rather than always one, and a request can be refused, so an
     // instruction sits in the pipeline longer and depths sized for a one-cycle

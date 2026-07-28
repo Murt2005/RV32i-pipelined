@@ -304,6 +304,49 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 	[ $$fail -eq 0 ]
 
 # --------------------------------------------------------------------
+# Official riscv-tests rv32um suite (M extension).
+#
+# Built with its own -march rather than the global one, so the M tests can be
+# brought up while every other program in the tree is still plain rv32i. Once the
+# extension is finished MARCH in site-config.sh moves to rv32im_zicsr and this
+# override becomes redundant -- but the two must stay separable until then, or a
+# half-finished multiplier breaks every existing test at once.
+# --------------------------------------------------------------------
+RVTESTS_M_DIR := tests/riscv-tests/isa/rv32um
+RVTESTS_M     := $(basename $(notdir $(wildcard $(RVTESTS_M_DIR)/*.S)))
+RVTESTS_M_ELF := $(addprefix build/riscv-tests-m/,$(addsuffix .elf,$(RVTESTS_M)))
+
+MARCH_M := rv32im_zicsr
+
+RVTEST_M_FLAGS := -march=$(MARCH_M) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
+                  -Itests/riscv-tests-env -Itests/riscv-tests/isa/macros/scalar \
+                  -T tests/riscv-tests-env/link.ld
+
+.PHONY: riscv-tests-m run-riscv-tests-m-iverilog
+
+build/riscv-tests-m/%.elf: $(RVTESTS_M_DIR)/%.S tests/riscv-tests-env/riscv_test.h
+	mkdir -p $(dir $@)
+	$(CC) $(RVTEST_M_FLAGS) -o $@ $<
+
+riscv-tests-m: $(RVTESTS_M_ELF)
+
+run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
+	@pass=0; fail=0; \
+	for t in $(RVTESTS_M); do \
+		/bin/bash ./elftohex.sh build/riscv-tests-m/$$t.elf . >/dev/null 2>&1; \
+		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
+		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
+		if [ "$$out" = "PASS" ]; then \
+			pass=$$((pass+1)); echo "PASS rv32um-$$t  finish=$$cyc"; \
+		else \
+			fail=$$((fail+1)); echo "FAIL rv32um-$$t  ($$out)"; \
+		fi; \
+	done; \
+	echo ""; echo "$$pass passed, $$fail failed, `echo $(RVTESTS_M) | wc -w | tr -d ' '` total"; \
+	[ $$fail -eq 0 ]
+
+# --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from
 # tests/riscv-tests/benchmarks/dhrystone (a number is only comparable if the
 # benchmark is); tests/bench/dhrystone/port.c supplies what this bare-metal

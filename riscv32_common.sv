@@ -1,5 +1,10 @@
 
-`define enable_ext_m        1
+// The M extension is on unless a build turns it off with -Dext_m_disable.
+//
+// It is not free: a combinational 32x32 multiplier costs roughly 3000 LUT4 on
+// an iCE40, which takes the pico2-ice build from 4916 to 8019 and well past the
+// 5280 that part has. That board's gateware therefore builds without it. On the
+// Cyclone V the multiplier maps to DSP blocks and the area is not the issue.
 `define tag_size            5
 
 // Package-local alias. `bool` is also declared at compilation-unit scope in
@@ -436,7 +441,47 @@ function automatic ext_operand execute(
         // The CSR read value is muxed in by the execute stage, which owns the
         // CSR file; nothing useful to compute here.
         q_system, q_misc_mem:  result = 0;
+`ifndef ext_m_disable
+        q_op, q_op_imm: if ((op_q == q_op) && (f7 == f7_ext_mul)) begin
+            // ---------------------------------------------------------------
+            // M extension, multiply half.
+            //
+            // Combinational, unlike divide, because this is the operation Doom's
+            // fixed-point maths runs on every inner loop -- putting it through an
+            // iterative unit would cost thirty cycles apiece and defeat the point
+            // of having the extension at all. It is a wide combinational path and
+            // a candidate for pipelining once there is a real fMax number to
+            // measure it against.
+            //
+            // The three high-half forms differ only in how the operands are
+            // extended to 33 bits, so they share one 66-bit product. The low half
+            // is the same for all signednesses, which is why MUL needs no variant
+            // of its own.
+            // ---------------------------------------------------------------
+            logic signed [32:0] ext_a, ext_b;
+            logic signed [65:0] product;
+
+            ext_a = (f3 == f3_ext_m_mulhu)
+                  ? $signed({1'b0, operand1[`word_size-1:0]})
+                  : $signed({operand1[`word_size-1], operand1[`word_size-1:0]});
+            ext_b = (f3 == f3_ext_m_mul || f3 == f3_ext_m_mulh)
+                  ? $signed({operand2[`word_size-1], operand2[`word_size-1:0]})
+                  : $signed({1'b0, operand2[`word_size-1:0]});
+            product = ext_a * ext_b;
+
+            case (f3)
+                f3_ext_m_mul:     result = {1'b0, product[`word_size-1:0]};
+                f3_ext_m_mulh,
+                f3_ext_m_mulhsu,
+                f3_ext_m_mulhu:   result = {1'b0, product[2*`word_size-1:`word_size]};
+                // DIV/DIVU/REM/REMU are iterative and resolved in the execute
+                // stage; it substitutes the result and never uses this.
+                default:    result = 0;
+            endcase
+        end else begin
+`else
         q_op, q_op_imm: begin
+`endif
             case (f3)
                 f3_addsub:
                     if (op_q == q_op_imm)
