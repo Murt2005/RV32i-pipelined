@@ -18,6 +18,7 @@ import glob
 import os
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -36,11 +37,44 @@ FIELDS = ("order pc_rdata pc_wdata insn rs1_addr rs1_rdata rs2_addr rs2_rdata "
           "trap").split()
 
 
-def run_sim(elf, repo_root, timeout_cycles=200000):
+def write_hex(image, prefix, out_dir):
+    """Write a memory image as the four byte-lane hex files memory.sv reads.
+
+    dumphex normally does this from an ELF via objcopy. Writing it directly lets
+    a caller simulate a program it generated in memory, with no ELF and no
+    assembler in the loop.
+    """
+    for lane in range(4):
+        with open(os.path.join(out_dir, f"{prefix}{lane}.hex"), "w") as f:
+            for i in range(lane, len(image), 4):
+                f.write(f"{image[i]:02x}\n")
+
+
+def run_sim_images(text, data, repo_root, timeout_cycles=200000, sim_args=()):
+    """Run the RVFI simulator over raw images and return the commit records.
+
+    Runs in a scratch directory rather than the repo root. memory.sv reads
+    code0.hex..data3.hex from the working directory, so every build target and
+    test runner in the tree writes those same eight files -- which means two runs
+    in parallel silently read each other's program. That has already produced one
+    phantom mismatch. Nothing here needs to be in the repo, so it is not.
+    """
+    with tempfile.TemporaryDirectory(prefix="rv32sim-") as work:
+        write_hex(text, "code", work)
+        write_hex(data if data else b"\x00" * 4, "data", work)
+        sim = os.path.abspath(os.path.join(repo_root, SIM))
+        return _run_sim_binary(work, timeout_cycles, sim_args, sim=sim)
+
+
+def run_sim(elf, repo_root, timeout_cycles=200000, sim_args=()):
     subprocess.run(["/bin/bash", "./elftohex.sh", elf, "."],
                    cwd=repo_root, capture_output=True)
-    r = subprocess.run([f"./{SIM}", f"+timeout={timeout_cycles}"],
-                       cwd=repo_root, capture_output=True, text=True, timeout=180)
+    return _run_sim_binary(repo_root, timeout_cycles, sim_args)
+
+
+def _run_sim_binary(work_dir, timeout_cycles, sim_args=(), sim=None):
+    r = subprocess.run([sim or f"./{SIM}", f"+timeout={timeout_cycles}", *sim_args],
+                       cwd=work_dir, capture_output=True, text=True, timeout=600)
     recs = []
     for line in r.stdout.splitlines():
         # Not anchored: the program's putchar uses $write with no newline, so a
@@ -63,8 +97,16 @@ def check(elf, repo_root, limit=None, verbose=False):
     recs = run_sim(elf, repo_root)
     if not recs:
         return [f"{os.path.basename(elf)}: no RVFI records"]
-
     text, data = elf_to_images(elf)
+    return compare(recs, text, data, limit=limit, verbose=verbose)
+
+
+def compare(recs, text, data, limit=None, verbose=False):
+    """Replay the commit records through the model and report disagreements.
+
+    Separated from check() so a caller with its own program -- a randomly
+    generated one, say -- can reuse the comparison without producing an ELF.
+    """
     model = Rv32Model(text, data)
     errors = []
 

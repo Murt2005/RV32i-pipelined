@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """
-Differential test: random RV32I programs, hardware vs reference model.
+Differential test: random RV32IM programs against the reference model.
 
-For each iteration it generates a random program -- ALU ops, loads and stores,
-forward branches, JAL, register-indirect JALR and counted loops with backward
-branches -- runs it on the FPGA and on rv32_model.py, then compares the full
-architectural state: all 30 general registers plus the scratch memory the
-program was allowed to touch, read back over the loader's 'R' command.
+For each iteration it generates a random program -- ALU ops, multiply and
+divide, loads and stores, forward branches, JAL, register-indirect JALR and
+counted loops with backward branches -- and runs it two ways:
+
+  default   on the FPGA, comparing the full architectural state afterwards: all
+            30 general registers plus the scratch memory the program was allowed
+            to touch, read back over the loader's 'R' command.
+
+  --sim     under iverilog, comparing the RVFI commit record instruction by
+            instruction. Slower per program, but it localises a disagreement to
+            the instruction that caused it, and it needs no hardware -- which is
+            what makes random testing usable while the pipeline itself is being
+            changed.
 
 Termination is structural, not hoped for: forward-only branches make progress
 monotonic, the loop counter lives in a reserved register and is masked to 0..7
@@ -20,9 +28,11 @@ in a pipelined core live in *interactions* -- a particular bypass source
 landing on a particular stall cycle next to a particular branch. Random
 sequences hit those combinations without anyone having to imagine them.
 
-    python3 host/rv32_diff.py                    # 50 programs
+    python3 host/rv32_diff.py                       # 50 programs, on hardware
+    python3 host/rv32_diff.py --sim --iters 100     # no hardware needed
+    python3 host/rv32_diff.py --sim --mem-latency 8 --stall-rate 128
     python3 host/rv32_diff.py --iters 500 --seed 7
-    python3 host/rv32_diff.py --length 400       # longer programs
+    python3 host/rv32_diff.py --length 400          # longer programs
 """
 
 import argparse
@@ -33,6 +43,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rv32_model import Rv32Model                                # noqa: E402
+from rvfi_check import run_sim_images, compare                   # noqa: E402
 from rv32_host import (open_board, Rv32Error, TEXT_BASE,        # noqa: E402
                        DATA_BASE, check_build_id)
 
@@ -151,11 +162,20 @@ def gen_program(rng, body_len):
 
     def simple(rng):
         """One instruction with no control flow, for use inside a loop body."""
-        kind = rng.choices(["op", "opimm", "shift", "lui", "auipc", "load", "store"],
-                           weights=[30, 20, 12, 6, 6, 13, 13])[0]
+        kind = rng.choices(["op", "opimm", "shift", "lui", "auipc", "load",
+                            "store", "m"],
+                           weights=[26, 17, 10, 5, 5, 12, 12, 13])[0]
         rd = rng.choice(wr_regs)
         rs1 = rng.choice(rd_regs)
         rs2 = rng.choice(rd_regs)
+        if kind == "m":
+            # MUL/MULH/MULHSU/MULHU/DIV/DIVU/REM/REMU. x0 is in rd_regs, so
+            # roughly one in thirty of these divides by zero -- a defined result
+            # rather than a trap, and one an implementation can easily get wrong.
+            # The signed-overflow corner, INT_MIN / -1, is left to the directed
+            # rv32um tests: it needs two specific operand values that random
+            # 32-bit registers will essentially never produce together.
+            return r_type(0x01, rs2, rs1, rng.randrange(0, 8), rd, 0x33)
         if kind == "op":
             _, f3, f7 = rng.choice(OP_F3F7)
             return r_type(f7, rs2, rs1, f3, rd, 0x33)
@@ -288,9 +308,45 @@ def run_one(board, rng, body_len, verbose=False):
     return None, text
 
 
+def run_one_sim(repo_root, rng, body_len, sim_args=()):
+    """Same comparison against the simulator instead of a board.
+
+    The board version compares final architectural state: thirty registers and a
+    block of scratch memory, read back over the loader. In simulation the RVFI
+    commit record is available, so this compares *every retired instruction* --
+    PC, encoding, both source operands, the result and the next PC -- which
+    localises a disagreement to the instruction that caused it rather than to
+    whatever the registers looked like at the end.
+
+    It exists mostly because the board version cannot run at all without
+    hardware attached, which left random-program testing unavailable exactly
+    while the pipeline was being rebuilt underneath it.
+    """
+    words, _ = gen_program(rng, body_len)
+    text = to_bytes(words)
+
+    model = Rv32Model(text, b"")
+    if not model.run():
+        return "model did not halt", None
+
+    recs = run_sim_images(text, b"", repo_root, sim_args=sim_args)
+    if not recs:
+        return "no RVFI records from the simulator", text
+
+    errors = compare(recs, text, b"")
+    if errors:
+        return errors[0].strip(), text
+    return None, text
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--sim", action="store_true",
+                    help="run against the iverilog simulator and compare the "
+                         "RVFI record, instead of against attached hardware")
+    ap.add_argument("--mem-latency", type=int, default=0,
+                    help="--sim only: extra memory latency, 0..N cycles per access")
     ap.add_argument("--port")
     ap.add_argument("--iters", type=int, default=50)
     ap.add_argument("--length", type=int, default=120,
@@ -305,6 +361,28 @@ def main():
     seed = args.seed if args.seed is not None else random.randrange(1 << 30)
     print(f"seed {seed}, {args.iters} programs of {args.length} instructions, "
           f"stall rate {args.stall_rate}/256")
+
+    if args.sim:
+        repo_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        sim_args = [f"+stallrate={args.stall_rate}",
+                    f"+memlatency={args.mem_latency}"]
+        failures = 0
+        for i in range(args.iters):
+            rng = random.Random(seed + i)
+            why, text = run_one_sim(repo_root, rng, args.length, sim_args)
+            if why:
+                failures += 1
+                print(f"FAIL  iter {i} (seed {seed + i}): {why}")
+                if text:
+                    os.makedirs(os.path.dirname(args.save_failure), exist_ok=True)
+                    with open(args.save_failure, "wb") as f:
+                        f.write(text)
+                    print(f"      program written to {args.save_failure}")
+                break
+            if (i + 1) % 10 == 0:
+                print(f"  {i + 1}/{args.iters} ok")
+        print(f"\n{args.iters - failures} matched, {failures} mismatched")
+        return 1 if failures else 0
 
     try:
         board = open_board(args.port)

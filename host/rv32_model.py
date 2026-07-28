@@ -26,6 +26,18 @@ def _u32(v):
     return v & MASK32
 
 
+def _trunc_div(a, b):
+    """Signed division truncating towards zero, as RISC-V defines it.
+
+    Python's // floors towards negative infinity, so -7 // 2 is -4 where the ISA
+    wants -3. Done on magnitudes with the sign reapplied rather than via float
+    division, which would be exact for 32-bit operands today and silently wrong
+    the moment anyone reuses this for 64.
+    """
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
 class MisalignedAccess(Exception):
     pass
 
@@ -121,6 +133,43 @@ class Rv32Model:
             imm = _sx(((instr >> 25) << 5) | ((instr >> 7) & 0x1F), 12)
             addr = _u32(a + imm)
             self._st(addr, {0: 1, 1: 2, 2: 4}[f3], b)
+        elif opcode == 0x33 and f7 == 0x01:                  # OP, M extension
+            # The corner cases are the whole point of writing these out rather
+            # than leaning on Python's operators, which disagree with the spec on
+            # every one of them:
+            #   * division by zero is defined, not a trap -- quotient is all ones
+            #     and remainder is the dividend.
+            #   * signed overflow, INT_MIN / -1, wraps to INT_MIN with a zero
+            #     remainder rather than raising.
+            #   * Python's // and % floor towards negative infinity; RISC-V
+            #     truncates towards zero, so -7/2 is -3 here and -4 in Python.
+            sa, sb = _sx(a, 32), _sx(b, 32)
+            if f3 == 0:                                      # MUL
+                val = _u32(sa * sb)
+            elif f3 == 1:                                    # MULH
+                val = _u32((sa * sb) >> 32)
+            elif f3 == 2:                                    # MULHSU
+                val = _u32((sa * b) >> 32)
+            elif f3 == 3:                                    # MULHU
+                val = _u32((a * b) >> 32)
+            elif f3 == 4:                                    # DIV
+                if sb == 0:
+                    val = 0xFFFFFFFF
+                elif sa == -0x80000000 and sb == -1:
+                    val = 0x80000000
+                else:
+                    val = _u32(_trunc_div(sa, sb))
+            elif f3 == 5:                                    # DIVU
+                val = 0xFFFFFFFF if b == 0 else _u32(a // b)
+            elif f3 == 6:                                    # REM
+                if sb == 0:
+                    val = _u32(sa)
+                elif sa == -0x80000000 and sb == -1:
+                    val = 0
+                else:
+                    val = _u32(sa - sb * _trunc_div(sa, sb))
+            else:                                            # REMU
+                val = _u32(a) if b == 0 else _u32(a % b)
         elif opcode in (0x13, 0x33):                         # OP-IMM / OP
             if opcode == 0x13:
                 operand = _u32(_sx(instr >> 20, 12))
