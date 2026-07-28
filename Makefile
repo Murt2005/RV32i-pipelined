@@ -6,9 +6,13 @@ CC=$(RISCV_PREFIX)-gcc
 AS=$(RISCV_PREFIX)-as
 LD=$(RISCV_PREFIX)-ld
 
-SSFLAGS=-march=rv32i
-CCFLAGS=-march=rv32i -Wno-builtin-declaration-mismatch -Ilibmc
-LDFLAGS=--script ld.script
+# MARCH/MABI come from site-config.sh, so this file and libmc/Makefile cannot
+# drift apart. -mabi is now explicit everywhere: it is the default for rv32i so
+# omitting it happened to work, but RISCV_LIB points at one specific multilib
+# directory and the two have to agree.
+SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
+CCFLAGS=-march=$(MARCH) -mabi=$(MABI) -Wno-builtin-declaration-mismatch -Ilibmc
+LDFLAGS=-m $(LDEMUL) --script ld.script
 LDPOSTFLAGS= -Llibmc -lmc  -Llibmc -lmc -L$(RISCV_LIB) -lgcc
 TOOLS=dumphex
 LIBS=libmc/libmc.a
@@ -107,7 +111,13 @@ run-tests-iverilog: $(TOOLS) $(SIM_IVERILOG)
 #   make cycle-baseline     # record, before the change
 #   make cycle-check        # compare, after it; non-zero exit on any delta
 # --------------------------------------------------------------------
-CYCLE_DIR := build/cycles
+# The baselines are checked in, not left in build/, for two reasons: `make clean`
+# would otherwise silently disarm the gate, and every test feeding it is
+# assembly, so the counts depend only on the RTL. That makes them a property of
+# the design rather than of one machine, and a diff in review shows exactly which
+# tests a pipeline change moved and by how much.
+CYCLE_DIR := tests/cycles
+CYCLE_LOG := build/cycles
 CYCLE_SUITES := directed:run-tests-iverilog \
                 rv32ui:run-riscv-tests-iverilog \
                 rv32ui-p:run-riscv-tests-p-iverilog
@@ -117,14 +127,14 @@ CYCLE_SUITES := directed:run-tests-iverilog \
 cycle-baseline: MODE := --save
 cycle-check:    MODE := --compare
 cycle-baseline cycle-check:
-	@mkdir -p $(CYCLE_DIR); rc=0; \
+	@mkdir -p $(CYCLE_DIR) $(CYCLE_LOG); rc=0; \
 	for s in $(CYCLE_SUITES); do \
 		name=$${s%%:*}; target=$${s#*:}; \
 		echo "===== $$name ====="; \
-		$(MAKE) --no-print-directory $$target > $(CYCLE_DIR)/$$name.log 2>&1 \
-			|| { echo "  suite FAILED -- see $(CYCLE_DIR)/$$name.log"; rc=1; continue; }; \
+		$(MAKE) --no-print-directory $$target > $(CYCLE_LOG)/$$name.log 2>&1 \
+			|| { echo "  suite FAILED -- see $(CYCLE_LOG)/$$name.log"; rc=1; continue; }; \
 		python3 host/cycle_report.py $(MODE) $(CYCLE_DIR)/$$name.json \
-			$(CYCLE_DIR)/$$name.log || rc=1; \
+			$(CYCLE_LOG)/$$name.log || rc=1; \
 	done; \
 	exit $$rc
 
@@ -161,7 +171,7 @@ RVTESTS_ALL   := $(basename $(notdir $(wildcard $(RVTESTS_DIR)/*.S)))
 RVTESTS       := $(filter-out $(RVTESTS_EXCLUDE),$(RVTESTS_ALL))
 RVTESTS_ELF   := $(addprefix build/riscv-tests/,$(addsuffix .elf,$(RVTESTS)))
 
-RVTEST_FLAGS := -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles -fno-builtin \
+RVTEST_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
                 -Itests/riscv-tests-env -Itests/riscv-tests/isa/macros/scalar \
                 -T tests/riscv-tests-env/link.ld
 
@@ -193,7 +203,7 @@ run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 # reports results through an ECALL trap handler and the `tohost` location
 # rather than through this project's MMIO registers. It therefore exercises
 # mtvec/mepc/mcause/ECALL/MRET on every single test.
-RVTEST_P_FLAGS := -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles -fno-builtin \
+RVTEST_P_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
                   -Itests/riscv-tests/env/p -Itests/riscv-tests/env \
                   -Itests/riscv-tests/isa/macros/scalar \
                   -T tests/riscv-tests-env/link-p.ld
@@ -234,7 +244,7 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 # --------------------------------------------------------------------
 DHRY_DIR  := tests/bench/dhrystone
 DHRY_OUT  := build/tests/bench/dhrystone
-DHRY_FLAGS := -march=rv32i -mabi=ilp32 -O2 -Ilibmc -I$(DHRY_DIR) \
+DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) -O2 -Ilibmc -I$(DHRY_DIR) \
               -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
               -Wno-implicit-int -Wno-return-type
 DHRY_OBJS := $(DHRY_OUT)/start.o $(DHRY_OUT)/dhrystone.o \

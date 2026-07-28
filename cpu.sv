@@ -1356,7 +1356,9 @@ logic chk_inst_outstanding;
 wire chk_data_accept = data_mem_req.valid & data_mem_rsp.ready;
 wire chk_inst_accept = inst_mem_req.valid & inst_mem_rsp.ready;
 
-always_ff @(posedge clk) begin
+// Plain always, not always_ff: Icarus warns on every $error inside an always_ff
+// because it cannot be synthesised, which is exactly the point here.
+always @(posedge clk) begin
     if (reset) begin
         // Still track acceptances during reset. fetch's request valid is not
         // gated on reset (see fetch: it is gated on the response's ready and on
