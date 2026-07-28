@@ -154,6 +154,13 @@ module fetch #(
 
     output memory_io_req                        instruction_memory_request,
     input memory_io_rsp                         instruction_memory_response,
+    // The request address on its own. A bus decoder needs only this to choose a
+    // target, and taking it from the request struct instead would make the
+    // decode depend on the whole struct -- including its valid, which is derived
+    // from the target's ready. That is a combinational cycle at struct
+    // granularity even though the value path is acyclic. fetch_pc is a register,
+    // so routing from here is unconditionally safe.
+    output riscv::word                          instruction_memory_addr,
 
     // Freeze the front end: a fetch is in flight and has not been answered, or
     // one cannot be issued at all. Consumed by control.
@@ -165,6 +172,7 @@ module fetch #(
 import riscv::*;
 
 word fetch_pc;
+assign instruction_memory_addr = fetch_pc;
 bool clear_fetch_stream;
 word clear_to_this_pc;
 instr32 latched_instruction_read;
@@ -937,7 +945,19 @@ end
 always_ff @(posedge clk) begin
     if (reset) begin
         rvfi_ex_valid <= 1'b0;
-    end else begin
+    end else if (memory_control_signal_in.advance) begin
+        // Gated exactly like the EX/MEM register above, which is only written
+        // when the memory stage advances. Updating this every cycle instead is
+        // wrong the moment the memory stage can be held: execute is frozen too,
+        // so the shadow is overwritten with a bubble while its instruction is
+        // still sitting in EX/MEM, and by the time the stage advances there is
+        // nothing left to report. The instruction executes correctly and simply
+        // vanishes from the commit record.
+        //
+        // Unreachable until a target could refuse or delay -- with every memory
+        // answering in one cycle the stage always advanced. rvfi-check ran only
+        // at zero added latency, so nothing exercised it until code ran from
+        // SDRAM behind an arbiter.
         rvfi_ex_valid     <= decoded_instruction_in.is_instruction_valid
                            & execute_control_signal_in.advance;
         rvfi_ex_insn      <= decoded_instruction_in.instruction;
@@ -1046,6 +1066,9 @@ module memory(
 
     output memory_io_req   data_memory_request,
     input  memory_io_rsp   data_memory_response,
+    // See the note in fetch: the decoder selects on this rather than on the
+    // request struct, so the selection cannot become part of a cycle.
+    output riscv::word     data_memory_addr,
     input executed_instruction_t  executed_instruction_in,
     output memory_instruction_t memory_instruction_out,
     output logic           retired,
@@ -1057,6 +1080,9 @@ module memory(
     // A weaker stall -- nothing is in flight, so writeback may still drain.
     output logic           dmem_issue_blocked
 );
+
+assign data_memory_addr =
+    executed_instruction_in.writeback_instruction.wbd[`word_address_size - 1:0];
 
 // One pulse per instruction leaving EX/MEM. Flushed instructions never get
 // here -- they are turned into bubbles at decode -- so this counts committed
@@ -1386,8 +1412,10 @@ module core #(
     input logic       [`word_address_size-1:0] reset_pc,
     output memory_io_req   inst_mem_req,
     input  memory_io_rsp   inst_mem_rsp,
+    output riscv::word     inst_mem_addr,
     output memory_io_req   data_mem_req,
-    input  memory_io_rsp   data_mem_rsp
+    input  memory_io_rsp   data_mem_rsp,
+    output riscv::word     data_mem_addr
 `ifdef RVFI
     ,output logic        rvfi_valid
     ,output logic [63:0] rvfi_order
@@ -1441,6 +1469,7 @@ fetch #(
     .btb_update_in(btb_update),
     .instruction_memory_request(inst_mem_req),
     .instruction_memory_response(inst_mem_rsp),
+    .instruction_memory_addr(inst_mem_addr),
     .imem_wait(imem_wait),
     .fetched_instruction_out(fetched_instruction)
 );
@@ -1512,6 +1541,7 @@ memory memory_m(
     .writeback_instruction_in(writeback_instruction),
     .data_memory_request(data_mem_req),
     .data_memory_response(data_mem_rsp),
+    .data_memory_addr(data_mem_addr),
     .executed_instruction_in(executed_instruction),
     .memory_instruction_out(memory_instruction),
     .retired(retired),

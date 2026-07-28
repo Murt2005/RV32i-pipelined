@@ -101,7 +101,7 @@ test: $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LIBS) $(TOOLS)
 # the edit having no effect.
 RTL_CORE := top.sv cpu.sv memory.sv memory_delay.sv memory_io.sv \
             riscv.sv riscv32_common.sv base.sv system.sv divider.sv \
-            bus/memory_map.sv bus/decoder.sv bus/mmio.sv
+            bus/memory_map.sv bus/decoder.sv bus/mmio.sv bus/arbiter.sv
 RTL_SRC  := itop.sv $(RTL_CORE)
 
 $(SIM_IVERILOG): $(RTL_SRC)
@@ -114,9 +114,21 @@ build/sim/result-rvfi: $(RTL_SRC)
 	mkdir -p $(dir $@)
 	$(IVERILOG) -g2012 -DRVFI -o $@ itop.sv
 
-.PHONY: rvfi-check
+# RVFI_LATENCY sweeps the commit record against a slow memory as well as a fast
+# one. The record has to be right in both cases and, until this existed, only the
+# fast one was ever checked.
+RVFI_LATENCY ?= 0
+
+.PHONY: rvfi-check rvfi-check-slow
 rvfi-check: build/sim/result-rvfi $(TOOLS) riscv-tests
-	python3 host/rvfi_check.py --all
+	python3 host/rvfi_check.py --all --mem-latency $(RVFI_LATENCY)
+
+rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests
+	@rc=0; for d in 1 4 8; do \
+		printf 'rvfi mem-latency %-3s ' $$d; \
+		python3 host/rvfi_check.py --all --mem-latency $$d > build/rvfi-$$d.log 2>&1 \
+			&& echo ok || { echo "FAILED -- build/rvfi-$$d.log"; rc=1; }; \
+	done; exit $$rc
 
 run-legacy-iverilog: result-iverilog
 
