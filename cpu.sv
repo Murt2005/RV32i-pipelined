@@ -70,6 +70,29 @@ typedef struct packed {
     writeback_instruction_t writeback_instruction;
 } executed_instruction_t;
 
+// ---------------------------------------------------------------------------
+// The instruction in ID/EX reads a register the load in EX/MEM has not written
+// yet, so it cannot be executed this cycle.
+//
+// Written once and used twice: control turns it into a one-cycle front-end
+// stall, and execute uses it to hold off starting the divider. Those two have
+// to agree exactly. When they did not -- when the divider started as soon as a
+// divide appeared in ID/EX, regardless of this -- the unit latched the stale
+// operand the stall exists to wait for, and `div t3, t2, t4` immediately after
+// `lw t2` produced a wrong quotient. Nothing else caught it: the arithmetic was
+// right, rv32um has no load-into-divide sequence, and formal cannot reach a
+// retired divide at any tractable depth.
+// ---------------------------------------------------------------------------
+function automatic bool is_load_use_hazard(
+        executed_instruction_t ex, decoded_instruction_t de);
+    return ex.is_instruction_valid
+        && (ex.instruction_opcode == riscv::q_load)
+        && de.is_instruction_valid
+        && (ex.writeback_instruction.wbs != 5'd0)
+        && ((de.rs1 == ex.writeback_instruction.wbs)
+         || (de.rs2 == ex.writeback_instruction.wbs));
+endfunction
+
 // PC correction struct from execute if branch misprediction or straight up wrong PC
 typedef struct packed {
     bool branch_redirect_needed;
@@ -590,7 +613,11 @@ wire is_div_op = decoded_instruction_in.is_instruction_valid
 logic        div_busy, div_done;
 word         div_result;
 
-wire div_start = is_div_op & ~div_busy & ~div_done;
+// Not while the operands are still in flight: a load-use hazard means rs1 or
+// rs2 is the destination of the load still in EX/MEM, and starting here would
+// capture the value the stall exists to wait for.
+wire div_start = is_div_op & ~div_busy & ~div_done
+               & ~is_load_use_hazard(executed_instruction_in, decoded_instruction_in);
 wire div_take  = is_div_op &  div_done & execute_control_signal_in.advance;
 
 assign div_wait = (is_div_op & ~div_done) | div_busy;
@@ -616,9 +643,17 @@ integer div_park;
 always @(posedge clk) begin
     if (reset || !div_done)      div_park <= 0;
     else if (div_done)           div_park <= div_park + 1;
-    // Generous: a slow memory can freeze execute for many cycles before the
-    // owning instruction gets to collect, so this only catches a true leak.
-    if (div_park > 256)
+    // This detects a *lost owner*, not slowness, and the bound has to be far
+    // above any legitimate wait or it reports the latter. Against a one-cycle
+    // memory a result is collected about two cycles after it is parked. Against
+    // a slow one it can take hundreds: to collect, the divide has to be in ID/EX
+    // on a cycle execute advances, and after the freeze lifts fetch issues a
+    // request that usually misses -- which freezes the front end again and
+    // clears ID/EX before the collect can happen. It retries until it draws a
+    // fast fetch. Measured over 900 such waits at MEM_LATENCY=16, with every
+    // result still correct. An instruction cache removes most of this, since
+    // hits answer in one cycle.
+    if (div_park > 65536)
         $error("%m: divider result parked for %0d cycles -- owner never returned",
                div_park);
 end
@@ -1250,13 +1285,7 @@ always_comb begin
     //     (decoded_instruction_in) reads the register that the load
     //     will write.
     // ------------------------------------------------------------------
-    if (executed_instruction_in.is_instruction_valid
-        && (executed_instruction_in.instruction_opcode == q_load)
-        && decoded_instruction_in.is_instruction_valid
-        && (executed_instruction_in.writeback_instruction.wbs != 5'd0)
-        && ((decoded_instruction_in.rs1 == executed_instruction_in.writeback_instruction.wbs)
-         || (decoded_instruction_in.rs2 == executed_instruction_in.writeback_instruction.wbs))
-       ) begin
+    if (is_load_use_hazard(executed_instruction_in, decoded_instruction_in)) begin
         // Stall fetch, decode, and execute for one cycle.
         fetch_control_signal_out.advance  = false;
         decode_control_signal_out.advance = false;

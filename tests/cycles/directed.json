@@ -4,6 +4,7 @@
   "tests/hazards/bypass_stress": 1058,
   "tests/hazards/data_ex_ex": 1149,
   "tests/hazards/data_mem_ex": 1202,
+  "tests/hazards/divide_handshake": 3344,
   "tests/hazards/load_chain": 950,
   "tests/hazards/load_use": 1624,
   "tests/isa/add_sub": 1564,
