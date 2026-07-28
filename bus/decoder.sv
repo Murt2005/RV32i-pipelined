@@ -35,6 +35,12 @@ module bus_decoder #(
     input  logic reset,
 
     input  memory_io_req  cpu_req,
+    // The request address, taken straight from the initiator's register rather
+    // than out of cpu_req. Selecting on the struct makes ready a function of the
+    // request, and the initiator derives its request valid from ready -- a cycle
+    // at struct granularity, even though only the address is ever read. This
+    // port exists solely to break that.
+    input  logic [31:0]   cpu_addr,
     output memory_io_rsp  cpu_rsp,
 
     output memory_io_req  imem_req,
@@ -49,25 +55,32 @@ module bus_decoder #(
     input  memory_io_rsp  sdram_rsp
 );
 
-wire [`BUS_SEL_W-1:0] raw_sel = bus_decode(cpu_req.addr);
+wire [`BUS_SEL_W-1:0] raw_sel = bus_decode(cpu_addr);
 wire [`BUS_SEL_W-1:0] sel     = present[raw_sel] ? raw_sel : `BUS_NONE;
 
-// Which target is ready for the address currently being presented. This is
-// combinational on the address, which is fine: the address does not depend on
-// ready, so there is no loop, and each target's own ready is registered.
-logic sel_ready;
+// Readiness of the target this address selects, and only that one.
+//
+// ANDing every target's ready together also breaks the cycle, and is what this
+// tried first. It is wrong for a different reason: it couples ports that have
+// nothing to do with each other. An instruction fetch from on-chip memory would
+// then stall whenever the shared SDRAM was busy, and since the arbiter offers
+// SDRAM on alternate cycles, the machine never completed its first fetch.
+//
+// Selecting here is safe because `sel` comes from cpu_addr, which the initiator
+// drives from a register -- see the port comment above.
+logic all_ready;
 always_comb begin
     case (sel)
-        `BUS_IMEM:  sel_ready = imem_rsp.ready;
-        `BUS_DMEM:  sel_ready = dmem_rsp.ready;
-        `BUS_MMIO:  sel_ready = mmio_rsp.ready;
-        `BUS_FB:    sel_ready = fb_rsp.ready;
-        `BUS_SDRAM: sel_ready = sdram_rsp.ready;
-        default:    sel_ready = 1'b1;          // unmapped, always accepts
+        `BUS_IMEM:  all_ready = imem_rsp.ready;
+        `BUS_DMEM:  all_ready = dmem_rsp.ready;
+        `BUS_MMIO:  all_ready = mmio_rsp.ready;
+        `BUS_FB:    all_ready = fb_rsp.ready;
+        `BUS_SDRAM: all_ready = sdram_rsp.ready;
+        default:    all_ready = 1'b1;          // unmapped, always accepts
     endcase
 end
 
-wire accepted = cpu_req.valid & sel_ready;
+wire accepted = cpu_req.valid & all_ready;
 
 // Present the request only to the selected target.
 always_comb begin
@@ -113,10 +126,10 @@ always_comb begin
             cpu_rsp.addr  = none_addr_q;
         end
     endcase
-    // ready always describes the target being addressed *now*, not the one
-    // answering. They are different whenever a new request is presented while
-    // the previous response is still coming back.
-    cpu_rsp.ready = sel_ready;
+    // ready is about whether a new request can be taken now, which is a
+    // different question from which target is answering -- hence it overrides
+    // whatever the muxed response carried.
+    cpu_rsp.ready = all_ready;
 end
 
 endmodule

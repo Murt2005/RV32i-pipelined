@@ -56,22 +56,46 @@ class Rv32Model:
     HALT_ADDR = 0x0002FFFC
     PUTCHAR_ADDR = 0x0002FFF8
 
+    # Regions outside the low 256 KiB, kept as separate sparse arrays rather than
+    # by growing `mem`: SDRAM sits at 0x80000000, and a flat bytearray covering
+    # that would be two gigabytes. Each entry is (base, size).
+    SDRAM_BASE, SDRAM_SIZE = 0x80000000, 1 << 20
+    FB_BASE,    FB_SIZE    = 0x10000000, 1 << 16
+
     def __init__(self, text, data, text_base=0x00010000, data_base=0x00020000):
         self.mem = bytearray(1 << 18)          # 256 KiB covers both regions
         self.text_base = text_base
         self.data_base = data_base
         self.mem[text_base:text_base + len(text)] = text
         self.mem[data_base:data_base + len(data)] = data
+        self.sdram = bytearray(self.SDRAM_SIZE)
+        self.fb = bytearray(self.FB_SIZE)
         self.x = [0] * 32
         self.pc = text_base
         self.output = bytearray()
         self.halted = False
 
     # ---- memory ----
+    def _region(self, addr):
+        """Which backing array an address belongs to, and its offset in it.
+
+        The core has a real address decoder now; every 64 KiB region used to be
+        an alias of every other, and a model that still folds them together
+        disagrees with the design for reasons that have nothing to do with the
+        instruction being checked. Addresses wrap within a region, exactly as the
+        hardware's do -- the memories index a fixed number of low bits.
+        """
+        if self.SDRAM_BASE <= addr < self.SDRAM_BASE + (1 << 26):
+            return self.sdram, (addr - self.SDRAM_BASE) % self.SDRAM_SIZE
+        if self.FB_BASE <= addr < self.FB_BASE + self.FB_SIZE:
+            return self.fb, addr - self.FB_BASE
+        return self.mem, addr
+
     def _ld(self, addr, n, signed):
         if addr % n:
             raise MisalignedAccess(f"load of {n} bytes at 0x{addr:08x}")
-        v = int.from_bytes(self.mem[addr:addr + n], "little")
+        buf, off = self._region(addr)
+        v = int.from_bytes(buf[off:off + n], "little")
         return _sx(v, n * 8) & MASK32 if signed else v
 
     def _st(self, addr, n, value):
@@ -83,11 +107,13 @@ class Rv32Model:
         if addr == self.HALT_ADDR:
             self.halted = True
             return
-        self.mem[addr:addr + n] = (value & ((1 << (n * 8)) - 1)).to_bytes(n, "little")
+        buf, off = self._region(addr)
+        buf[off:off + n] = (value & ((1 << (n * 8)) - 1)).to_bytes(n, "little")
 
     # ---- execution ----
     def step(self):
-        instr = int.from_bytes(self.mem[self.pc:self.pc + 4], "little")
+        ibuf, ioff = self._region(self.pc)
+        instr = int.from_bytes(ibuf[ioff:ioff + 4], "little")
         opcode = instr & 0x7F
         rd = (instr >> 7) & 0x1F
         f3 = (instr >> 12) & 0x07
@@ -216,7 +242,8 @@ class Rv32Model:
         return False
 
     def read(self, addr, n):
-        return bytes(self.mem[addr:addr + n])
+        buf, off = self._region(addr)
+        return bytes(buf[off:off + n])
 
 
 if __name__ == "__main__":

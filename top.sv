@@ -4,6 +4,7 @@
 `include "bus/memory_map.sv"
 `include "bus/decoder.sv"
 `include "bus/mmio.sv"
+`include "bus/arbiter.sv"
 `include "cpu.sv"
 
 // stall_rate drives the core's stall input from an LFSR, `stall_rate`/256 of
@@ -44,6 +45,8 @@ memory_io_req 	inst_mem_req;
 memory_io_rsp 	inst_mem_rsp;
 memory_io_req   data_mem_req;
 memory_io_rsp   data_mem_rsp;
+riscv::word     inst_mem_addr;
+riscv::word     data_mem_addr;
 
 core the_core(
 	.clk(clk)
@@ -57,6 +60,8 @@ core the_core(
 
 	,.data_mem_req(data_mem_req)
 	,.data_mem_rsp(data_mem_rsp)
+	,.inst_mem_addr(inst_mem_addr)
+	,.data_mem_addr(data_mem_addr)
 );
 
 always @(posedge clk) begin
@@ -84,9 +89,9 @@ end
 // extra cycle -- which is what makes the cycle gate meaningful here.
 // ---------------------------------------------------------------------------
 memory_io_req i_imem_req, i_dmem_req, i_mmio_req, i_fb_req, i_sdram_req;
-memory_io_rsp i_imem_rsp;
+memory_io_rsp i_imem_rsp, i_sdram_rsp;
 memory_io_req d_imem_req, d_dmem_req, d_mmio_req, d_fb_req, d_sdram_req;
-memory_io_rsp d_dmem_rsp, d_mmio_rsp, d_fb_rsp;
+memory_io_rsp d_dmem_rsp, d_mmio_rsp, d_fb_rsp, d_sdram_rsp;
 
 // Ports a given decoder does not use. Driven from a wire rather than wired to
 // the localparam directly, so nothing depends on a tool accepting a struct
@@ -94,22 +99,17 @@ memory_io_rsp d_dmem_rsp, d_mmio_rsp, d_fb_rsp;
 memory_io_rsp tie_off_rsp;
 assign tie_off_rsp = memory_io_no_rsp;
 
-// SDRAM is absent until the caches land. Both ports would share one device, so
-// it needs an arbiter, and that belongs with the caches rather than bolted on
-// here -- keeping it out means this step is exactly "a decoder appeared and
-// nothing else changed", which is a claim the cycle gate can check.
-
-// Instruction side: instruction memory only, for now.
+// Instruction side: instruction memory and SDRAM.
 bus_decoder #(
-    .present(8'd1 << `BUS_IMEM)
+    .present((8'd1 << `BUS_IMEM) | (8'd1 << `BUS_SDRAM))
 ) ibus (
     .clk(clk), .reset(reset),
-    .cpu_req(inst_mem_req), .cpu_rsp(inst_mem_rsp),
+    .cpu_req(inst_mem_req), .cpu_addr(inst_mem_addr), .cpu_rsp(inst_mem_rsp),
     .imem_req(i_imem_req),   .imem_rsp(i_imem_rsp),
     .dmem_req(i_dmem_req),   .dmem_rsp(tie_off_rsp),
     .mmio_req(i_mmio_req),   .mmio_rsp(tie_off_rsp),
     .fb_req(i_fb_req),       .fb_rsp(tie_off_rsp),
-    .sdram_req(i_sdram_req), .sdram_rsp(tie_off_rsp)
+    .sdram_req(i_sdram_req), .sdram_rsp(i_sdram_rsp)
 );
 
 // Data side: everything except instruction memory. A store into the instruction
@@ -118,15 +118,16 @@ bus_decoder #(
 // store is dropped rather than silently landing in data memory, which is what
 // the old aliasing map did.
 bus_decoder #(
-    .present((8'd1 << `BUS_DMEM) | (8'd1 << `BUS_MMIO) | (8'd1 << `BUS_FB))
+    .present((8'd1 << `BUS_DMEM) | (8'd1 << `BUS_MMIO)
+           | (8'd1 << `BUS_FB)   | (8'd1 << `BUS_SDRAM))
 ) dbus (
     .clk(clk), .reset(reset),
-    .cpu_req(data_mem_req), .cpu_rsp(data_mem_rsp),
+    .cpu_req(data_mem_req), .cpu_addr(data_mem_addr), .cpu_rsp(data_mem_rsp),
     .imem_req(d_imem_req),   .imem_rsp(tie_off_rsp),
     .dmem_req(d_dmem_req),   .dmem_rsp(d_dmem_rsp),
     .mmio_req(d_mmio_req),   .mmio_rsp(d_mmio_rsp),
     .fb_req(d_fb_req),       .fb_rsp(d_fb_rsp),
-    .sdram_req(d_sdram_req), .sdram_rsp(tie_off_rsp)
+    .sdram_req(d_sdram_req), .sdram_rsp(d_sdram_rsp)
 );
 
 memory_delay #(
@@ -172,6 +173,31 @@ memory_delay #(
     ,.max_delay(mem_delay)
     ,.req(d_fb_req)
     ,.rsp(d_fb_rsp)
+    );
+
+// SDRAM, shared by both ports through the arbiter. The real device is 64 MiB;
+// this models 1 MiB, which is all a simulation test needs and all iverilog
+// wants to allocate. Addresses alias within it, exactly as the legacy memories
+// do within their 64 KiB.
+memory_io_req sdram_req;
+memory_io_rsp sdram_rsp;
+
+bus_arbiter sdram_arb(
+    .clk(clk), .reset(reset),
+    .a_req(d_sdram_req), .a_rsp(d_sdram_rsp),
+    .b_req(i_sdram_req), .b_rsp(i_sdram_rsp),
+    .t_req(sdram_req),   .t_rsp(sdram_rsp)
+);
+
+memory_delay #(
+    .size(32'h0010_0000)
+    ,.enable_rsp_addr(true)
+    ) sdram (
+    .clk(clk)
+    ,.reset(reset)
+    ,.max_delay(mem_delay)
+    ,.req(sdram_req)
+    ,.rsp(sdram_rsp)
     );
 
 logic        putchar_valid;
