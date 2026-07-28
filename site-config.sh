@@ -13,14 +13,14 @@
 #
 # Two things to know about the newer compiler:
 #   * CSR instructions now need the extension named explicitly, so the march
-#     strings are rv32i_zicsr rather than rv32i. Older GCC accepted csrr under
+#     strings are rv32im_zicsr rather than rv32im. Older GCC accepted csrr under
 #     plain rv32i.
 #   * RISCV_LIB has the compiler version in its path. Regenerate it with
-#       riscv64-unknown-elf-gcc -march=rv32i_zicsr -mabi=ilp32 \
+#       riscv64-unknown-elf-gcc -march=rv32im_zicsr -mabi=ilp32 \
 #           -print-libgcc-file-name
 #     and drop the trailing /libgcc.a.
 RISCV_PREFIX=/opt/homebrew/bin/riscv64-unknown-elf
-RISCV_LIB=/opt/homebrew/Cellar/riscv-gnu-toolchain/main/lib/gcc/riscv64-unknown-elf/15.1.0/rv32i/ilp32
+RISCV_LIB=/opt/homebrew/Cellar/riscv-gnu-toolchain/main/lib/gcc/riscv64-unknown-elf/15.1.0/rv32im/ilp32
 VERILATOR=/usr/local/bin/verilator
 IVERILOG=/opt/homebrew/bin/iverilog
 
@@ -28,8 +28,11 @@ IVERILOG=/opt/homebrew/bin/iverilog
 # objects that get linked together -- they have to agree, and RISCV_LIB above
 # has to point at the matching multilib.
 #
-# Adding the M extension is a change to these two lines plus RISCV_LIB.
-MARCH=rv32i_zicsr
+# The core implements M, so C code multiplies and divides natively instead of
+# calling libgcc's __mulsi3/__divsi3 -- which is most of what the Dhrystone
+# number used to be paying for. RISCV_LIB must point at the matching multilib or
+# the link fails on mismatched ISA attributes.
+MARCH=rv32im_zicsr
 MABI=ilp32
 
 # ld's default emulation follows the toolchain's target, and this one is

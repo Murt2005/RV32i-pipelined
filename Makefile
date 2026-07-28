@@ -76,8 +76,17 @@ build/%.elf: build/%.o
 	$(LD) $(LDFLAGS) -o $@ $<
 
 
-libmc/libmc.a:
-	cd libmc; make clean; make; cd ..
+# Rebuilt when its sources *or the ISA* change. It had no prerequisites at all,
+# so it was only ever built when missing -- and `make clean` does not remove it.
+# Switching MARCH therefore left a stale rv32i archive to be linked against
+# rv32im objects, which silently reintroduced libgcc's soft multiply and divide
+# into a build that has hardware for both.
+LIBMC_SRC := $(wildcard libmc/*.c) $(wildcard libmc/*.s) $(wildcard libmc/*.h) \
+             libmc/Makefile site-config.sh
+
+libmc/libmc.a: $(LIBMC_SRC)
+	$(MAKE) -C libmc clean
+	$(MAKE) -C libmc
 
 dumphex: dumphex.c
 	gcc -o dumphex dumphex.c
@@ -222,6 +231,7 @@ result-iverilog: itop.sv top.sv cpu.sv test
 
 clean:
 	rm -rf dumphex test.vcd obj_dir/ *.o result-verilator result-iverilog *.hex test.bin test build
+	$(MAKE) -C libmc clean
 
 
 # --------------------------------------------------------------------
