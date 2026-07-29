@@ -452,11 +452,49 @@ doom: $(DOOM_OUT)/doom.sdram.bin $(DOOM_OUT)/doom.boot.bin
 
 # 64 MiB of SDRAM, matching the board. Doom's zone allocator takes what it is
 # given and the WAD sits above it; the iverilog suite keeps the 1 MiB default.
+#
+# This is the one build in the repo tuned for speed rather than for checking,
+# because it is the only one whose run time anybody waits on: a frame of Doom is
+# millions of cycles, where a directed test is thousands. Three things are being
+# bought, in descending order of value.
+#
+# OPT_FAST. Verilator's verilated.mk sets `OPT_FAST = -Os` -- the generated model
+# is compiled for *size* by default, which is the wrong trade for a model that
+# runs for billions of cycles. It is a plain `=`, so overriding it means passing
+# it on the sub-make command line, which in turn means not using --build.
+#
+# SYNTHESIS. Compiles out the `ifndef SYNTHESIS` checkers in cpu.sv, the caches
+# and the arbiter. Those are worth their cost in the suites that exist to catch
+# things and they still run there -- run-tests-iverilog, the verilator test top,
+# rvfi-check and formal all keep them. Paying for them again here buys nothing,
+# because a Doom run asserts nothing and reports nothing but pixels. Set
+# DOOM_CHECKS=1 to build the demo with them in.
+#
+# x-assign/x-initial fast. Drops Verilator's X-propagation modelling. Safe here
+# specifically because the memories and both caches zero themselves in `initial`
+# blocks -- that was done for the RVFI record, and it is what makes uninitialised
+# state a non-question for this design.
+DOOM_CHECKS ?= 0
+ifeq ($(DOOM_CHECKS),1)
+DOOM_VDEFS :=
+else
+DOOM_VDEFS := +define+SYNTHESIS
+endif
+
+# -mcpu=native on arm64, -march=native on x86. Neither is portable to a machine
+# other than the one that built it, which is fine for a local demo binary and is
+# why this stays out of every other Verilator rule in this file.
+DOOM_NATIVE := $(shell uname -m | grep -q arm && echo -mcpu=native || echo -march=native)
+DOOM_JOBS   := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+
 build/doom/Vtop: $(RTL_CORE) $(DOOM_DIR)/doom_sim.cpp
 	@mkdir -p build/doom
-	$(VERILATOR) -O2 --cc --build --top-module top -Wno-fatal \
-		-Gsdram_bytes=67108864 \
+	$(VERILATOR) -O3 --cc --top-module top -Wno-fatal \
+		-Gsdram_bytes=67108864 --savable \
+		--x-assign fast --x-initial fast $(DOOM_VDEFS) \
 		--Mdir build/doom top.sv $(DOOM_DIR)/doom_sim.cpp --exe -o Vtop
+	$(MAKE) -C build/doom -f Vtop.mk -j$(DOOM_JOBS) \
+		OPT_FAST="-O3 $(DOOM_NATIVE)" OPT_GLOBAL="-O2"
 
 # Frames come out as PPM because the harness needs no library to write it.
 # Nothing on macOS opens PPM, so this converts them.
@@ -467,6 +505,10 @@ doom-png:
 # DOOM_KEYS points the harness at a scripted input sequence; unset means Doom
 # gets no input at all and sits on the title screen before starting its demo.
 DOOM_KEYS ?= $(DOOM_DIR)/keys.txt
+# Memory latency and stall injection for the Doom run. Zero measures the core
+# with a memory that never waits, which flatters it; the board's SDRAM will not.
+DOOM_LATENCY ?= 0
+DOOM_STALL   ?= 0
 
 doom-sim: build/doom/Vtop doom
 	@mkdir -p build/doom
@@ -474,11 +516,52 @@ doom-sim: build/doom/Vtop doom
 	@# longer one behind, and doom-png converts those too -- so the frames you
 	@# end up looking at are a mix of this run and whatever ran before it.
 	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
-	DOOM_KEYS=$(DOOM_KEYS) ./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
+	DOOM_KEYS=$(DOOM_KEYS) RV32_MEM_LATENCY=$(DOOM_LATENCY) \
+	RV32_STALL_RATE=$(DOOM_STALL) ./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
 		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin $(DOOM_FRAMES)
 	@$(MAKE) --no-print-directory doom-png
 
 DOOM_FRAMES ?= 2
+
+# --------------------------------------------------------------------
+# Interactive Doom.
+#
+# Not real-time and never will be -- an in-game frame is about a third of a
+# second of wall clock against the fortieth Doom expects -- but it is a real
+# machine running a real game and taking real keystrokes, which is the point.
+#
+# The boot is what made this unusable before, not the frame rate: 327 million
+# cycles, over a minute, spent building the same tables every single run. So it
+# is done once and frozen. `doom-snapshot` boots to the title screen and
+# serialises the entire model; `doom-live` thaws it in about a second and hands
+# you the keyboard.
+DOOM_SNAP ?= build/doom/title.snap
+
+# Frame 115, not frame 1, for two independent reasons. Doom melts the title
+# screen in over about a hundred frames and ignores input while that wipe runs,
+# so an earlier snapshot resumes into a game that will not answer the keyboard.
+# And it does not push a palette until the melt finishes, so an earlier snapshot
+# restores with the palette register genuinely all zero and renders black.
+DOOM_SNAP_FRAME ?= 115
+
+.PHONY: doom-snapshot doom-live
+$(DOOM_SNAP): build/doom/Vtop doom
+	@mkdir -p build/doom
+	DOOM_KEYS= DOOM_SAVE=$(DOOM_SNAP) DOOM_SAVE_FRAME=$(DOOM_SNAP_FRAME) \
+	./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
+		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin 0
+
+doom-snapshot: $(DOOM_SNAP)
+
+# Frames still land in build/doom as they are drawn, so a session leaves a
+# record of itself; doom-png turns them into something viewable afterwards.
+doom-live: build/doom/Vtop doom $(DOOM_SNAP)
+	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
+	DOOM_KEYS= DOOM_LIVE=1 DOOM_LOAD=$(DOOM_SNAP) \
+	RV32_MEM_LATENCY=$(DOOM_LATENCY) RV32_STALL_RATE=$(DOOM_STALL) \
+	./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
+		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin 0
+	@$(MAKE) --no-print-directory doom-png
 
 # --------------------------------------------------------------------
 # Official riscv-tests rv32um suite (M extension).
