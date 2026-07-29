@@ -142,6 +142,32 @@ module rvfi_wrapper (
             RSP.ready = NAME``_ready;                                          \
         end
 
+    // ------------------------------------------------------------------
+    // The external stall input, driven by the solver.
+    //
+    // This was tied to zero, which left the whole path uncovered -- and it is
+    // not an obscure one. On the board it is transmit-queue backpressure, it
+    // freezes fetch, decode and execute while memory and writeback drain, and
+    // the fetch realign it interacts with has already produced one silently
+    // wrong execution in this core's history. A proof that never asserts it
+    // says nothing about any of that.
+    //
+    // Bounded structurally rather than by an assumption: at most two stalled
+    // cycles in a row. A stall that can be held forever really does stop the
+    // core retiring, so `liveness` would fail on the environment rather than on
+    // the design, and that is not a useful counterexample.
+    // ------------------------------------------------------------------
+    (* keep *) `rvformal_rand_reg stall_rand;
+
+    logic [1:0] stall_run;
+    always @(posedge clock) begin
+        if (reset)                 stall_run <= 2'd0;
+        else if (core_stall)       stall_run <= stall_run + 2'd1;
+        else                       stall_run <= 2'd0;
+    end
+
+    wire core_stall = stall_rand & ~stall_run[1];
+
     `MEM_TARGET(imem, inst_req, inst_rsp, imem_rdata, inst_rand_ready, inst_rand_delay)
     `MEM_TARGET(dmem, data_req, data_rsp, dmem_rdata, data_rand_ready, data_rand_delay)
 
@@ -151,7 +177,7 @@ module rvfi_wrapper (
     ) uut (
         .clk(clock),
         .reset(reset),
-        .stall(1'b0),
+        .stall(core_stall),
         .clear_regs(1'b0),
         .reset_pc(32'h0001_0000),
         .inst_mem_req(inst_req),
