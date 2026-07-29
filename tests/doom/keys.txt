@@ -1,0 +1,32 @@
+# Scripted input for the Doom harness: "<frame> <down|up> <keycode>".
+#
+# Doom cannot be played in simulation -- a frame costs a second or two of wall
+# clock -- so it is driven instead. This sequence walks the menus into a game
+# and then moves, which is enough to exercise the 3D renderer rather than a
+# static title screen.
+#
+# Codes are from tests/doom/src/doomkeys.h:
+#   0x0d ENTER   0x1b ESCAPE   0xad UP   0xae RIGHT   0xa3 FIRE   0xa2 USE
+
+# Doom melts the title screen in over roughly a hundred rendered frames, and
+# ignores input while a wipe is running -- so nothing here fires before then.
+# Dismiss the title screen and open the menu.
+102   down 0x1b
+103   up   0x1b
+# "New Game"
+105   down 0x0d
+106   up   0x0d
+# Episode 1
+108   down 0x0d
+109   up   0x0d
+# Skill level (the default is pre-selected)
+111  down 0x0d
+112  up   0x0d
+
+# In the level now: walk forward for a while, so the renderer has real geometry
+# to draw rather than a menu overlay.
+120  down 0xad
+140  up   0xad
+# Turn, to change what is on screen.
+142  down 0xae
+150  up   0xae

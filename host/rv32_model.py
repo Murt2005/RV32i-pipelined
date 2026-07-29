@@ -26,6 +26,18 @@ def _u32(v):
     return v & MASK32
 
 
+def _trunc_div(a, b):
+    """Signed division truncating towards zero, as RISC-V defines it.
+
+    Python's // floors towards negative infinity, so -7 // 2 is -4 where the ISA
+    wants -3. Done on magnitudes with the sign reapplied rather than via float
+    division, which would be exact for 32-bit operands today and silently wrong
+    the moment anyone reuses this for 64.
+    """
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
 class MisalignedAccess(Exception):
     pass
 
@@ -44,22 +56,46 @@ class Rv32Model:
     HALT_ADDR = 0x0002FFFC
     PUTCHAR_ADDR = 0x0002FFF8
 
+    # Regions outside the low 256 KiB, kept as separate sparse arrays rather than
+    # by growing `mem`: SDRAM sits at 0x80000000, and a flat bytearray covering
+    # that would be two gigabytes. Each entry is (base, size).
+    SDRAM_BASE, SDRAM_SIZE = 0x80000000, 1 << 20
+    FB_BASE,    FB_SIZE    = 0x10000000, 1 << 16
+
     def __init__(self, text, data, text_base=0x00010000, data_base=0x00020000):
         self.mem = bytearray(1 << 18)          # 256 KiB covers both regions
         self.text_base = text_base
         self.data_base = data_base
         self.mem[text_base:text_base + len(text)] = text
         self.mem[data_base:data_base + len(data)] = data
+        self.sdram = bytearray(self.SDRAM_SIZE)
+        self.fb = bytearray(self.FB_SIZE)
         self.x = [0] * 32
         self.pc = text_base
         self.output = bytearray()
         self.halted = False
 
     # ---- memory ----
+    def _region(self, addr):
+        """Which backing array an address belongs to, and its offset in it.
+
+        The core has a real address decoder now; every 64 KiB region used to be
+        an alias of every other, and a model that still folds them together
+        disagrees with the design for reasons that have nothing to do with the
+        instruction being checked. Addresses wrap within a region, exactly as the
+        hardware's do -- the memories index a fixed number of low bits.
+        """
+        if self.SDRAM_BASE <= addr < self.SDRAM_BASE + (1 << 26):
+            return self.sdram, (addr - self.SDRAM_BASE) % self.SDRAM_SIZE
+        if self.FB_BASE <= addr < self.FB_BASE + self.FB_SIZE:
+            return self.fb, addr - self.FB_BASE
+        return self.mem, addr
+
     def _ld(self, addr, n, signed):
         if addr % n:
             raise MisalignedAccess(f"load of {n} bytes at 0x{addr:08x}")
-        v = int.from_bytes(self.mem[addr:addr + n], "little")
+        buf, off = self._region(addr)
+        v = int.from_bytes(buf[off:off + n], "little")
         return _sx(v, n * 8) & MASK32 if signed else v
 
     def _st(self, addr, n, value):
@@ -71,11 +107,13 @@ class Rv32Model:
         if addr == self.HALT_ADDR:
             self.halted = True
             return
-        self.mem[addr:addr + n] = (value & ((1 << (n * 8)) - 1)).to_bytes(n, "little")
+        buf, off = self._region(addr)
+        buf[off:off + n] = (value & ((1 << (n * 8)) - 1)).to_bytes(n, "little")
 
     # ---- execution ----
     def step(self):
-        instr = int.from_bytes(self.mem[self.pc:self.pc + 4], "little")
+        ibuf, ioff = self._region(self.pc)
+        instr = int.from_bytes(ibuf[ioff:ioff + 4], "little")
         opcode = instr & 0x7F
         rd = (instr >> 7) & 0x1F
         f3 = (instr >> 12) & 0x07
@@ -121,6 +159,43 @@ class Rv32Model:
             imm = _sx(((instr >> 25) << 5) | ((instr >> 7) & 0x1F), 12)
             addr = _u32(a + imm)
             self._st(addr, {0: 1, 1: 2, 2: 4}[f3], b)
+        elif opcode == 0x33 and f7 == 0x01:                  # OP, M extension
+            # The corner cases are the whole point of writing these out rather
+            # than leaning on Python's operators, which disagree with the spec on
+            # every one of them:
+            #   * division by zero is defined, not a trap -- quotient is all ones
+            #     and remainder is the dividend.
+            #   * signed overflow, INT_MIN / -1, wraps to INT_MIN with a zero
+            #     remainder rather than raising.
+            #   * Python's // and % floor towards negative infinity; RISC-V
+            #     truncates towards zero, so -7/2 is -3 here and -4 in Python.
+            sa, sb = _sx(a, 32), _sx(b, 32)
+            if f3 == 0:                                      # MUL
+                val = _u32(sa * sb)
+            elif f3 == 1:                                    # MULH
+                val = _u32((sa * sb) >> 32)
+            elif f3 == 2:                                    # MULHSU
+                val = _u32((sa * b) >> 32)
+            elif f3 == 3:                                    # MULHU
+                val = _u32((a * b) >> 32)
+            elif f3 == 4:                                    # DIV
+                if sb == 0:
+                    val = 0xFFFFFFFF
+                elif sa == -0x80000000 and sb == -1:
+                    val = 0x80000000
+                else:
+                    val = _u32(_trunc_div(sa, sb))
+            elif f3 == 5:                                    # DIVU
+                val = 0xFFFFFFFF if b == 0 else _u32(a // b)
+            elif f3 == 6:                                    # REM
+                if sb == 0:
+                    val = _u32(sa)
+                elif sa == -0x80000000 and sb == -1:
+                    val = 0
+                else:
+                    val = _u32(sa - sb * _trunc_div(sa, sb))
+            else:                                            # REMU
+                val = _u32(a) if b == 0 else _u32(a % b)
         elif opcode in (0x13, 0x33):                         # OP-IMM / OP
             if opcode == 0x13:
                 operand = _u32(_sx(instr >> 20, 12))
@@ -167,7 +242,8 @@ class Rv32Model:
         return False
 
     def read(self, addr, n):
-        return bytes(self.mem[addr:addr + n])
+        buf, off = self._region(addr)
+        return bytes(buf[off:off + n])
 
 
 if __name__ == "__main__":

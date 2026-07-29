@@ -30,6 +30,15 @@ SV_SRC     := $(TOP).sv uart.sv memory_spram.sv \
 
 INC        := -I$(ROOT) -I.
 
+# The RTL carries simulation-only protocol checkers behind `ifndef SYNTHESIS.
+# Nothing defines it for us -- sv2v and yosys both leave it undefined -- so
+# without this the checkers' state and comparators are synthesised into a design
+# that is already at 93% LC.
+# ext_m_disable: the UP5K cannot hold the M extension. A combinational 32x32
+# multiplier takes this design from 4916 to 8019 LUT4 against a 5280 budget, so
+# the board that this gateware targets builds the base ISA, as it always has.
+DEFS       := -DSYNTHESIS -Dext_m_disable
+
 DFU_VID_PID := 1209:b1c0
 
 .PHONY: all prog clean stat util time lint sim
@@ -41,7 +50,7 @@ $(BUILD)/$(TOP).v: $(TOP).sv uart.sv memory_spram.sv $(ROOT)/cpu.sv \
                    $(ROOT)/riscv32_common.sv $(ROOT)/memory_io.sv \
                    $(ROOT)/base.sv $(ROOT)/system.sv $(ROOT)/riscv.sv
 	@mkdir -p $(BUILD)
-	sv2v $(INC) --write=$@ $(TOP).sv
+	sv2v $(INC) $(DEFS) --write=$@ $(TOP).sv
 
 # ---- 2. synthesis ---------------------------------------------------------
 $(BUILD)/$(TOP).json: $(BUILD)/$(TOP).v

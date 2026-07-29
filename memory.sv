@@ -22,11 +22,19 @@ module memory32 #(
 
     localparam size_l2 = $clog2(size);
 
-    // Data memory
-    reg [7:0]   data0[0:size/4 - 1];
-    reg [7:0]   data1[0:size/4 - 1];
-    reg [7:0]   data2[0:size/4 - 1];
-    reg [7:0]   data3[0:size/4 - 1];
+    // Data memory.
+    //
+    // Marked public so a Verilator harness can read and write the contents
+    // directly. Reading: the framebuffer is one of these, and a harness has no
+    // other way to capture a frame -- streaming 64000 bytes through the putchar
+    // register would take longer than rendering the frame did. Writing: a Doom
+    // WAD is four megabytes, and $readmemh of a hex file that size is slower
+    // than the simulation it precedes. Ignored by every other tool and costs
+    // nothing in synthesis.
+    reg [7:0]   data0[0:size/4 - 1] /*verilator public_flat_rw*/;
+    reg [7:0]   data1[0:size/4 - 1] /*verilator public_flat_rw*/;
+    reg [7:0]   data2[0:size/4 - 1] /*verilator public_flat_rw*/;
+    reg [7:0]   data3[0:size/4 - 1] /*verilator public_flat_rw*/;
 
     initial begin
         // Vivado simulation fills the BRAM with X's and this makes a complete mess of

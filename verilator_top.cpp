@@ -30,6 +30,14 @@ int main(int argc, char** argv) {
     if (const char *sr = std::getenv("RV32_STALL_RATE"))
         top->stall_rate = (unsigned char)std::strtoul(sr, nullptr, 10);
 
+    // Same knob as +memlatency: makes both memories answer late and refuse
+    // requests while busy. 0 is a single-cycle memory. Worth sweeping alongside
+    // RV32_STALL_RATE in the coverage runs, since the miss stalls are otherwise
+    // unreachable and would sit at zero coverage.
+    top->mem_delay = 0;
+    if (const char *md = std::getenv("RV32_MEM_LATENCY"))
+        top->mem_delay = (unsigned char)std::strtoul(md, nullptr, 10);
+
     // Watchdog, so a program that never halts cannot hang a coverage sweep.
     vluint64_t max_time = 2000000;
     if (const char *env = std::getenv("RV32_MAX_CYCLES"))

@@ -1,0 +1,9 @@
+# From the title-screen snapshot straight into a level, then stand still.
+1  down 0x1b
+2  up   0x1b
+4  down 0x0d
+5  up   0x0d
+7  down 0x0d
+8  up   0x0d
+10 down 0x0d
+11 up   0x0d
