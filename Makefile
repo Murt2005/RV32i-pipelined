@@ -557,11 +557,26 @@ DOOM_SNAP ?= build/doom/title.snap
 DOOM_SNAP_FRAME ?= 115
 
 .PHONY: doom-snapshot doom-live
-$(DOOM_SNAP): build/doom/Vtop doom
+# Real files, not the `doom` phony, and Vtop order-only. Both matter.
+#
+# `doom` is .PHONY, so naming it here made the snapshot out of date on every
+# single invocation -- `make doom-live` rebuilt it from scratch every time, a
+# hundred seconds before the game started, which looks exactly like doom-live
+# being broken.
+#
+# Vtop is order-only (after the |) because the snapshot is Verilator's
+# serialisation of the *model* state. Editing the harness's C++ cannot
+# invalidate it; editing the RTL can, which is why $(RTL_CORE) is a real
+# prerequisite.
+$(DOOM_SNAP): $(RTL_CORE) $(DOOM_OUT)/doom.sdram.bin $(DOOM_OUT)/doom.boot.bin \
+              $(DOOM_DIR)/doom1.wad | build/doom/Vtop
 	@mkdir -p build/doom
-	DOOM_KEYS= DOOM_SAVE=$(DOOM_SNAP) DOOM_SAVE_FRAME=$(DOOM_SNAP_FRAME) \
+	@echo "building the boot snapshot once (~100 s); doom-live reuses it in 0.3 s"
+	@DOOM_KEYS= DOOM_SAVE=$(DOOM_SNAP) DOOM_SAVE_FRAME=$(DOOM_SNAP_FRAME) \
 	./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
-		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin 0
+		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin 0 \
+		> build/doom/snapshot.log 2>&1
+	@echo "snapshot ready: $(DOOM_SNAP)"
 
 doom-snapshot: $(DOOM_SNAP)
 
@@ -576,7 +591,7 @@ doom-snapshot: $(DOOM_SNAP)
 #
 # Frames still land in build/doom as they are drawn, so a session leaves a
 # record; doom-gif turns it into something watchable afterwards.
-doom-live: build/doom/Vtop doom $(DOOM_SNAP)
+doom-live: $(DOOM_SNAP) | build/doom/Vtop
 	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
 	@printf '  arrows/WASD move   , . strafe   space use   f fire\n'
 	@printf '  enter select   esc menu   tab map   y yes   q quit\n'
@@ -595,7 +610,7 @@ DOOM_CAPTURE ?= 1
 
 # Watch a scripted run go past in the terminal instead of playing it.
 .PHONY: doom-watch
-doom-watch: build/doom/Vtop doom $(DOOM_SNAP)
+doom-watch: $(DOOM_SNAP) | build/doom/Vtop
 	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
 	@DOOM_KEYS=$(DOOM_KEYS) DOOM_TUI=1 DOOM_LOAD=$(DOOM_SNAP) \
 	RV32_MEM_LATENCY=$(DOOM_LATENCY) RV32_STALL_RATE=$(DOOM_STALL) \
