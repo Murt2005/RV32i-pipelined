@@ -577,6 +577,39 @@ int main(int argc, char **argv)
         }
     };
 
+    // ------------------------------------------------------------------
+    // PC sampling profiler.
+    //
+    // Every attempt this session to reason about where Doom's cycles go has
+    // been wrong -- the renderer settings, the blit, the frame cost itself --
+    // and each time the fix was to look at the actual data rather than at an
+    // argument about it. This is that, for cycles: sample the fetch PC at a
+    // fixed interval and count where it lands.
+    //
+    // Fixed interval rather than every cycle, because a sample every cycle
+    // costs more than the model does and buys nothing: at 64-cycle spacing a
+    // single frame still yields tens of thousands of samples, which is far more
+    // than is needed to separate a 30% function from a 3% one.
+    //
+    // A flat array indexed by word offset, not a hash map: the lookup is on the
+    // hot path and the whole text segment is only a couple of megabytes.
+    // ------------------------------------------------------------------
+    // DOOM_PROFILE_FROM is not optional in practice, and the default of 0 is a
+    // trap worth naming. A run reaches gameplay through a title screen, a menu,
+    // a level load and a forty-frame melt, and those frames do wildly different
+    // work: the title screen alone blits all 64000 pixels through V_DrawPatch
+    // every frame, against 1187 in gameplay. Profiling from frame 0 therefore
+    // reports V_DrawPatch at 45% of "a gameplay frame" when its real share is
+    // under 1%. Set this past the melt.
+    const char *prof_path = getenv("DOOM_PROFILE");
+    int prof_from = 0;
+    if (const char *e = getenv("DOOM_PROFILE_FROM")) prof_from = atoi(e);
+    static const uint32_t PROF_BASE  = SDRAM_BASE;
+    static const size_t   PROF_WORDS = 1u << 20;      // 4 MiB of text
+    std::vector<uint32_t> prof;
+    uint64_t prof_other = 0, prof_samples = 0;
+    if (prof_path) prof.assign(PROF_WORDS, 0);
+
     // A cycle budget, so a benchmark run stops at a fixed amount of work rather
     // than a fixed amount of time. Comparing two builds needs the numerator
     // held still; timing "however far it got in 60 seconds" compares nothing.
@@ -703,6 +736,14 @@ int main(int argc, char **argv)
         top->clk = 1; top->eval();
         top->clk = 0; top->eval();
 
+        if (!prof.empty() && frames >= prof_from && (main_time & 0x3F) == 0) {
+            uint32_t pc = root->top__DOT__the_core__DOT__fetch_m__DOT__fetch_pc;
+            uint32_t off = (pc - PROF_BASE) >> 2;
+            if (pc >= PROF_BASE && off < PROF_WORDS) prof[off]++;
+            else                                     prof_other++;
+            prof_samples++;
+        }
+
         if (top->frame_done) {
             // Palette lives in the top as a plain array; read it out with the
             // frame so the colours match what the program had set at that point.
@@ -827,6 +868,22 @@ int main(int argc, char **argv)
             fflush(stdout);
         }
         main_time++;
+    }
+
+    if (!prof.empty()) {
+        FILE *pf = fopen(prof_path, "w");
+        if (pf) {
+            fprintf(pf, "# pc-samples total=%llu outside=%llu\n",
+                    (unsigned long long)prof_samples,
+                    (unsigned long long)prof_other);
+            for (size_t i = 0; i < PROF_WORDS; i++)
+                if (prof[i])
+                    fprintf(pf, "%08x %u\n",
+                            (unsigned)(PROF_BASE + (i << 2)), prof[i]);
+            fclose(pf);
+            printf("profile: %llu samples from frame %d onward -> %s\n",
+                   (unsigned long long)prof_samples, prof_from, prof_path);
+        }
     }
 
     top->final();
