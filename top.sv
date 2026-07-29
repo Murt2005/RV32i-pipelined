@@ -33,7 +33,30 @@ module top #(
    // Key injection, driven by the harness. On the board this is where the PS/2
    // receiver connects instead.
    input  logic key_strobe,
-   input  logic [8:0] key_event);
+   input  logic [8:0] key_event
+// ---------------------------------------------------------------------------
+// Board builds define BOARD_TOP: the SDRAM is a real device outside this
+// module, the framebuffer gains a second port for video scanout, and the
+// palette is readable by the DAC side.
+//
+// `ifdef rather than a parameter with a generate block, and that is not a
+// stylistic choice. tests/doom/doom_sim.cpp reaches into this hierarchy by
+// flattened name -- top__DOT__sdram__DOT__mem__DOT__data0 and the same for
+// fb_mem -- to load the program and read out frames. A generate block inserts a
+// scope, every one of those paths changes, and the Doom harness stops working
+// with an error that points at the harness rather than at here. With `ifdef the
+// simulation build is textually identical to what it was.
+// ---------------------------------------------------------------------------
+`ifdef BOARD_TOP
+   , output memory_io_req sdram_req_o
+   , input  memory_io_rsp sdram_rsp_i
+   , input  logic         fb_rd_clk
+   , input  logic [16:0]  fb_rd_addr
+   , output logic [7:0]   fb_rd_data
+   , input  logic [7:0]   pal_rd_addr
+   , output logic [23:0]  pal_rd_data
+`endif
+   );
 
 logic [15:0] stall_lfsr;
 logic        cpu_stall;
@@ -176,8 +199,22 @@ memory_delay #(
     ,.rsp(d_dmem_rsp)
     );
 
-// Framebuffer, 64 KiB. No display in simulation; it exists so the software side
-// of the port can be written and tested against the real address.
+// Framebuffer, 64 KiB. In simulation there is no display, so it is an ordinary
+// memory and the latency sweep applies to it like any other region. On the
+// board it is a true dual-port RAM whose second port feeds video scanout.
+`ifdef BOARD_TOP
+fb_ram #(
+    .bytes(32'h0001_0000)
+    ) fb_mem (
+    .clk(clk)
+    ,.reset(reset)
+    ,.req(d_fb_req)
+    ,.rsp(d_fb_rsp)
+    ,.rd_clk(fb_rd_clk)
+    ,.rd_addr(fb_rd_addr)
+    ,.rd_data(fb_rd_data)
+    );
+`else
 memory_delay #(
     .size(32'h0001_0000)
     ,.enable_rsp_addr(true)
@@ -188,6 +225,7 @@ memory_delay #(
     ,.req(d_fb_req)
     ,.rsp(d_fb_rsp)
     );
+`endif
 
 // SDRAM, shared by both ports through the arbiter. The real device is 64 MiB;
 // this models 1 MiB, which is all a simulation test needs and all iverilog
@@ -236,6 +274,11 @@ bus_arbiter sdram_arb(
 // 64 KiB instruction memory -- which is anything with a C library in it -- can be
 // placed here and run. The files are optional: $readmemh warns and leaves the
 // array zeroed when they are absent, which is what every existing test wants.
+`ifdef BOARD_TOP
+// The real device, driven by fpga/de1soc/sdram_ctrl.sv outside this module.
+assign sdram_req_o = sdram_req;
+assign sdram_rsp   = sdram_rsp_i;
+`else
 memory_delay #(
     .size(sdram_bytes)
     ,.initialize_mem(true)
@@ -251,6 +294,7 @@ memory_delay #(
     ,.req(sdram_req)
     ,.rsp(sdram_rsp)
     );
+`endif
 
 logic        putchar_valid;
 logic [7:0]  putchar_data;
@@ -277,6 +321,13 @@ mmio mmio_m(
 // Palette store, read by the harness when it captures a frame. On the board this
 // becomes the VGA scanout's lookup table.
 logic [23:0] palette [0:255] /*verilator public_flat_rw*/;
+
+`ifdef BOARD_TOP
+// Read port for scanout, on the pixel clock. Written on clk, read on fb_rd_clk:
+// a dual-port inference, which is what the palette needs to be anyway.
+always_ff @(posedge fb_rd_clk)
+    pal_rd_data <= palette[pal_rd_addr];
+`endif
 always @(posedge clk)
     if (palette_valid) palette[palette_index] <= palette_rgb;
 

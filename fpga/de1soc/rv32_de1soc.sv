@@ -197,20 +197,40 @@ module rv32_de1soc (
 
     // ---- the machine -----------------------------------------------------
     //
-    // NOTE: top.sv currently instantiates its own behavioural SDRAM and keeps
-    // the framebuffer and palette internal, so it cannot yet be handed the
-    // ports above. Adding an `external_sdram` parameter to it -- exposing
-    // sdram_req/rsp, the framebuffer's second port and the palette, and
-    // defaulting to today's behaviour -- is the remaining integration step, and
-    // it is deliberately not bolted on here: it changes the module every
-    // simulation and every test in the project runs through, so it needs the
-    // cycle-check gate behind it rather than a quick edit at the end of a
-    // session.
+    // The same top.sv every simulation and every test in the project runs
+    // through, compiled with BOARD_TOP so that the SDRAM comes from the
+    // controller above, the framebuffer gains its scanout port, and the palette
+    // is readable by the DAC side. The simulation build is textually unchanged
+    // by that define; `make cycle-check` reports identical counts across all
+    // 103 tests.
     //
-    // Everything this file provides is finished and independently tested:
-    // fpga/de1soc/sim/{vga,ps2,sdram}_tb all pass.
-
+    // stall_rate and mem_delay are the simulation injectors and are tied off:
+    // the first is the path the liveness counterexample lives on (see the file
+    // header), the second models a memory that is now real.
     logic halt, frame_done;
+
+    top #(
+        .sdram_bytes(32'h0400_0000)          // the real 64 MiB
+    ) machine (
+        .clk(clk_sys),
+        .reset(reset),
+        .stall_rate(8'd0),
+        .mem_delay(8'd0),
+        .halt(halt),
+        .frame_done(frame_done),
+        .key_strobe(key_strobe),
+        .key_event(key_event),
+
+        .sdram_req_o(sdram_req),
+        .sdram_rsp_i(sdram_rsp),
+
+        .fb_rd_clk(clk_pix),
+        .fb_rd_addr(fb_addr),
+        .fb_rd_data(fb_index),
+
+        .pal_rd_addr(pal_addr),
+        .pal_rd_data(pal_rgb)
+    );
 
     // ---- bring-up visibility ---------------------------------------------
     // LEDs before a console, because these are the only thing that works when

@@ -84,7 +84,14 @@ module sdram_ctrl #(
     localparam int T_RFC  = `CYC(t_rfc_ns);
     localparam int T_WR   = `CYC(t_wr_ns);
     localparam int T_INIT = (clk_hz / 1_000_000) * t_init_us;
-    localparam int T_REF  = (clk_hz / 100_000_000) * refresh_us_x100;
+    // Divide by a million first, then by a hundred. Doing it as
+    // (clk_hz / 100_000_000) * refresh_us_x100 reads more directly and is
+    // wrong: it is integer division, so at 50 MHz the first term is 0, the
+    // whole interval becomes 0, and $clog2(1) makes the counter zero bits wide.
+    // The board build is the 50 MHz one; the testbench ran at 100 MHz, where
+    // the expression happens to give the right answer. Scaling down before
+    // multiplying also keeps clk_hz * refresh out of 32-bit overflow.
+    localparam int T_REF  = (clk_hz / 1_000_000) * refresh_us_x100 / 100;
 
     localparam int CW = 16;                      // wide enough for T_INIT
     localparam int RW = $clog2(T_REF + 1);

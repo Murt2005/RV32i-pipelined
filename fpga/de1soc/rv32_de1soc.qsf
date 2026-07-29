@@ -134,6 +134,12 @@ set_global_assignment -name SYSTEMVERILOG_FILE rv32_de1soc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE vga.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ps2_keyboard.sv
 set_global_assignment -name SYSTEMVERILOG_FILE sdram_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE fb_ram.sv
+# BOARD_TOP swaps top.sv's behavioural SDRAM for the real controller, gives the
+# framebuffer its scanout port, and exports the palette. The simulation build is
+# textually unchanged without it -- `make cycle-check` reports identical counts
+# across all 103 tests either way.
+set_global_assignment -name VERILOG_MACRO "BOARD_TOP=1"
 set_global_assignment -name SYSTEMVERILOG_FILE ../../top.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../cpu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ../../divider.sv
