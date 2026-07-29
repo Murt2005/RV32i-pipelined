@@ -11,7 +11,7 @@ ROOT    := ../..
 BUILD   := $(ROOT)/build/de1soc
 IVERILOG?= iverilog
 
-TESTS := vga ps2
+TESTS := vga ps2 sdram
 
 .PHONY: sim $(TESTS) clean
 
@@ -25,6 +25,9 @@ vga: $(BUILD)/vga_tb
 ps2: $(BUILD)/ps2_tb
 	@$(BUILD)/ps2_tb
 
+sdram: $(BUILD)/sdram_tb
+	@$(BUILD)/sdram_tb
+
 $(BUILD)/vga_tb: sim/vga_tb.sv vga.sv
 	@mkdir -p $(BUILD)
 	@$(IVERILOG) -g2012 -o $@ $^
@@ -32,6 +35,11 @@ $(BUILD)/vga_tb: sim/vga_tb.sv vga.sv
 $(BUILD)/ps2_tb: sim/ps2_tb.sv ps2_keyboard.sv
 	@mkdir -p $(BUILD)
 	@$(IVERILOG) -g2012 -o $@ $^
+
+# -I$(ROOT) so the shared memory_io.sv / system.sv are found.
+$(BUILD)/sdram_tb: sim/sdram_tb.sv sim/sdram_model.sv sdram_ctrl.sv
+	@mkdir -p $(BUILD)
+	@$(IVERILOG) -g2012 -I$(ROOT) -o $@ $^
 
 clean:
 	rm -rf $(BUILD)
