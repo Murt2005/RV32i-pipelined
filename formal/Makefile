@@ -57,18 +57,47 @@ run: checks
 # Divide needs depth 56 for a thirty-five cycle iterative unit. See wrapper.sv.
 M_CHECKS := insn_(mul|mulh|mulhsu|mulhu|div|divu|rem|remu)_
 
+# Read the verdict out of the status file, never from sby's exit code.
+#
+# riscv-formal generates every .sby with `expect pass,fail`, which tells sby that
+# a failing property is an anticipated outcome rather than an error -- so sby
+# exits 0 whether the check passed or produced a counterexample. Deciding PASS
+# from `sby && echo PASS` therefore reports every failure as a pass, silently,
+# and this file did exactly that until a liveness counterexample turned up
+# labelled PASS. The status file is the only honest source.
+#
+# ERROR is kept distinct from FAIL on purpose: a check that could not run (a
+# missing rvfi_top.v, a solver that died) is a broken harness, not a broken
+# core, and the two need different responses.
+define run_check
+	n=`basename $$c .sby`; printf "%-24s " $$n; \
+	sby -f $$c > /dev/null 2>&1; \
+	s=`awk '{print $$1; exit}' $$n/status 2>/dev/null`; \
+	case "$$s" in \
+		PASS) echo PASS ;; \
+		FAIL) echo "FAIL  (counterexample: $$n/engine_0/trace.vcd)" ;; \
+		*)    echo "ERROR (no status; see $$n/logfile.txt)" ;; \
+	esac
+endef
+
 run-insn: checks
 	@cd $(CHECKDIR)/checks && for c in `ls insn_*.sby 2>/dev/null | grep -vE '$(M_CHECKS)'`; do \
-		n=`basename $$c .sby`; printf "%-24s " $$n; \
-		sby -f $$c > /dev/null 2>&1 && echo PASS || echo FAIL; \
+		$(run_check); \
 	done
 
 # The expensive ones, on their own. Expect this to take hours, and expect the
 # multiply checks not to finish at all.
 run-m: checks
 	@cd $(CHECKDIR)/checks && for c in `ls insn_*.sby 2>/dev/null | grep -E '$(M_CHECKS)'`; do \
-		n=`basename $$c .sby`; printf "%-24s " $$n; \
-		sby -f $$c > /dev/null 2>&1 && echo PASS || echo FAIL; \
+		$(run_check); \
+	done
+
+# The consistency checks -- everything that is not a per-instruction check.
+# These were only ever run by hand, which is part of why a liveness failure sat
+# unnoticed; having a target means they run the same way every time.
+run-consistency: checks
+	@cd $(CHECKDIR)/checks && for c in `ls *.sby 2>/dev/null | grep -v '^insn_'`; do \
+		$(run_check); \
 	done
 
 clean:
