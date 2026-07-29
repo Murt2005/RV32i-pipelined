@@ -498,9 +498,21 @@ build/doom/Vtop: $(RTL_CORE) $(DOOM_DIR)/doom_sim.cpp
 
 # Frames come out as PPM because the harness needs no library to write it.
 # Nothing on macOS opens PPM, so this converts them.
-.PHONY: doom-png
+.PHONY: doom-png doom-gif
 doom-png:
 	@python3 host/ppm_to_png.py build/doom/*.ppm
+
+# A couple of hundred stills is a film, not a flipbook. GIF because Doom's
+# output is already 8-bit paletted, so the frames go in without being requantised
+# -- and because it needs no encoder installed.
+#   make doom-gif DOOM_GIF_DELAY=5   slower playback (hundredths of a second)
+#   make doom-gif DOOM_GIF_SCALE=1   no pixel doubling
+DOOM_GIF       ?= build/doom/doom.gif
+DOOM_GIF_DELAY ?= 3
+DOOM_GIF_SCALE ?= 2
+doom-gif:
+	@python3 host/frames_to_gif.py $(DOOM_GIF) build/doom/frame*.ppm \
+		--delay=$(DOOM_GIF_DELAY) --scale=$(DOOM_GIF_SCALE)
 
 # DOOM_KEYS points the harness at a scripted input sequence; unset means Doom
 # gets no input at all and sits on the title screen before starting its demo.
