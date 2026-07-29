@@ -21,7 +21,9 @@ top the_top(
     ,.stall_rate(stall_rate)
     ,.mem_delay(mem_delay)
     ,.halt(halt)
-    ,.frame_done());
+    ,.frame_done()
+    ,.key_strobe(1'b0)
+    ,.key_event(9'd0));
 
 always #5 clk = ~clk;
 

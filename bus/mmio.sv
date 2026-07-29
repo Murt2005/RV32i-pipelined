@@ -46,7 +46,13 @@ module mmio(
     // Palette write: index and 24-bit colour.
     output logic        palette_valid,
     output logic [7:0]  palette_index,
-    output logic [23:0] palette_rgb
+    output logic [23:0] palette_rgb,
+
+    // Key events pushed in from outside: the board's PS/2 receiver, or a
+    // simulation harness. Held in a small queue because a program polls once a
+    // frame and a burst of presses would otherwise be lost between polls.
+    input  logic        key_strobe,
+    input  logic [8:0]  key_event      // [8] pressed, [7:0] code
 );
 
 wire selected = req.valid & (is_any_byte(req.do_read) | is_any_byte(req.do_write));
@@ -58,12 +64,22 @@ wire is_write = selected & is_any_byte(req.do_write);
 // requirement that it not depend on the live request.
 wire accept = selected;
 
+// Four entries is enough for a program that polls every frame; the harness and
+// a PS/2 receiver both deliver far slower than that.
+logic [8:0] key_q [0:3];
+logic [2:0] key_wr, key_rd;
+wire        key_empty = (key_wr == key_rd);
+wire        key_pop   = selected & ~is_write & (req.addr == `MMIO_KEY) & ~key_empty;
+
 logic [31:0] rd_value;
 
 always_comb begin
     case (req.addr)
         `MMIO_CYCLES:  rd_value = perf_cycles;
         `MMIO_RETIRED: rd_value = perf_retired;
+        // Bit 31 distinguishes "no event" from "release of key 0".
+        `MMIO_KEY:     rd_value = key_empty ? 32'd0
+                                : {1'b1, 22'd0, key_q[key_rd[1:0]]};
         default:       rd_value = 32'd0;
     endcase
 end
@@ -95,7 +111,16 @@ always_ff @(posedge clk) begin
     if (reset) begin
         rsp        <= memory_io_no_rsp;
         halt_pulse <= 1'b0;
+        key_wr     <= 3'd0;
+        key_rd     <= 3'd0;
     end else begin
+        if (key_strobe) begin
+            key_q[key_wr[1:0]] <= key_event;
+            key_wr             <= key_wr + 3'd1;
+        end
+        if (key_pop)
+            key_rd <= key_rd + 3'd1;
+
         rsp        <= memory_io_no_rsp;
         // A store to either address stops the machine. tohost is how the stock
         // riscv-tests `p` environment reports its result, and it then spins

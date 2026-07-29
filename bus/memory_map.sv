@@ -66,6 +66,10 @@
 // Palette: writing {index[7:0], 8'b0, b, g, r} sets one entry. Doom changes the
 // palette for damage flashes and item pickups, so this cannot be write-once.
 `define MMIO_PALETTE    32'h0002_FFD8
+// Keyboard. Reading pops one event: bit 31 says an event was there at all,
+// bit 8 is press/release, bits 7:0 are the key. Reads-to-empty return zero, so
+// a polling loop needs no separate "any pending" register.
+`define MMIO_KEY        32'h0002_FFDC
 
 function automatic logic [`BUS_SEL_W-1:0] bus_decode(logic [31:0] addr);
     // Ordered most specific first: the MMIO page sits inside the data region.

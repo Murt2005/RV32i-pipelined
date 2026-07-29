@@ -33,6 +33,7 @@
 #define FRAMEBUFFER   ((uint8_t *)0x10000000u)
 #define MMIO_FRAME    (*(volatile uint32_t *)0x0002FFD4u)
 #define MMIO_PALETTE  (*(volatile uint32_t *)0x0002FFD8u)
+#define MMIO_KEY      (*(volatile uint32_t *)0x0002FFDCu)
 
 /* Where the harness leaves the WAD, and a header describing it. Kept at a fixed
  * address rather than passed in argv because the loader writes it there before
@@ -109,10 +110,15 @@ uint32_t DG_GetTicksMs(void)
 
 int DG_GetKey(int *pressed, unsigned char *key)
 {
-    /* No input yet. PS/2 arrives with the board; until then Doom runs its demo
-     * loop, which is what the frame capture wants anyway. */
-    (void)pressed; (void)key;
-    return 0;
+    /* One event per call, as doomgeneric expects -- it calls until we say there
+     * is nothing left. Bit 31 distinguishes "queue empty" from "release of key
+     * code zero", which a bare zero could not. */
+    uint32_t e = MMIO_KEY;
+    if (!(e & 0x80000000u))
+        return 0;
+    *pressed = (e >> 8) & 1;
+    *key     = (unsigned char)(e & 0xFF);
+    return 1;
 }
 
 void DG_SetWindowTitle(const char *title)

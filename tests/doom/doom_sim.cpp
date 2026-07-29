@@ -156,12 +156,54 @@ int main(int argc, char **argv)
     uint32_t palette[256];
     for (int i = 0; i < 256; i++) palette[i] = 0;
 
+    // Scripted input: "<frame> <down|up> <keycode>" per line. Doom is driven
+    // rather than played -- a frame costs a second or two of wall clock, so
+    // real-time interaction is not on the table, but a canned sequence gets it
+    // off the title screen and into the game.
+    struct KeyEvent { int frame; int pressed; int code; };
+    std::vector<KeyEvent> script;
+    if (const char *sp = getenv("DOOM_KEYS")) {
+        FILE *kf = fopen(sp, "r");
+        if (kf) {
+            // Line at a time, because fscanf("%d ...") stops dead on the
+            // first comment and silently yields an empty script -- which looks
+            // exactly like Doom ignoring the input.
+            char line[256];
+            while (fgets(line, sizeof line, kf)) {
+                char *p = line;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p == '#' || *p == '\n' || *p == '\0') continue;
+                char what[16]; int fr, code;
+                if (sscanf(p, "%d %15s %i", &fr, what, &code) == 3)
+                    script.push_back({fr, strcmp(what, "up") != 0, code});
+            }
+            fclose(kf);
+            printf("loaded %zu key events from %s\n", script.size(), sp);
+        } else {
+            fprintf(stderr, "cannot open key script %s\n", sp);
+        }
+    }
+    size_t next_key = 0;
+
     std::vector<uint8_t> frame(FB_W * FB_H);
     int frames = 0;
     vluint64_t last_report = 0;
 
     while (!Verilated::gotFinish()) {
         if (main_time > 20) top->reset = 0;
+
+        // Inject at most one event per cycle; the queue in the MMIO block holds
+        // a few so a burst between polls is not lost.
+        top->key_strobe = 0;
+        if (next_key < script.size() && script[next_key].frame <= frames) {
+            top->key_strobe = 1;
+            top->key_event  = (uint16_t)((script[next_key].pressed << 8)
+                                       | (script[next_key].code & 0xFF));
+            printf("  key %s 0x%02x at frame %d\n",
+                   script[next_key].pressed ? "down" : "up",
+                   script[next_key].code, frames);
+            next_key++;
+        }
         top->clk = 1; top->eval();
         top->clk = 0; top->eval();
 

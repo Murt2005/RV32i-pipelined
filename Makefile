@@ -458,10 +458,25 @@ build/doom/Vtop: $(RTL_CORE) $(DOOM_DIR)/doom_sim.cpp
 		-Gsdram_bytes=67108864 \
 		--Mdir build/doom top.sv $(DOOM_DIR)/doom_sim.cpp --exe -o Vtop
 
+# Frames come out as PPM because the harness needs no library to write it.
+# Nothing on macOS opens PPM, so this converts them.
+.PHONY: doom-png
+doom-png:
+	@python3 host/ppm_to_png.py build/doom/*.ppm
+
+# DOOM_KEYS points the harness at a scripted input sequence; unset means Doom
+# gets no input at all and sits on the title screen before starting its demo.
+DOOM_KEYS ?= $(DOOM_DIR)/keys.txt
+
 doom-sim: build/doom/Vtop doom
 	@mkdir -p build/doom
-	./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin $(DOOM_DIR)/doom1.wad \
-		$(DOOM_OUT)/doom.boot.bin $(DOOM_FRAMES)
+	@# Clear old captures first. Without this a shorter run leaves the tail of a
+	@# longer one behind, and doom-png converts those too -- so the frames you
+	@# end up looking at are a mix of this run and whatever ran before it.
+	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
+	DOOM_KEYS=$(DOOM_KEYS) ./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
+		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin $(DOOM_FRAMES)
+	@$(MAKE) --no-print-directory doom-png
 
 DOOM_FRAMES ?= 2
 

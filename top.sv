@@ -29,7 +29,11 @@ module top #(
    output logic halt,
    // A frame has been completed in the framebuffer. Brought out as a port rather
    // than reached into, so the harness has a defined thing to watch.
-   output logic frame_done);
+   output logic frame_done,
+   // Key injection, driven by the harness. On the board this is where the PS/2
+   // receiver connects instead.
+   input  logic key_strobe,
+   input  logic [8:0] key_event);
 
 logic [15:0] stall_lfsr;
 logic        cpu_stall;
@@ -265,7 +269,9 @@ mmio mmio_m(
     .frame_valid(frame_valid),
     .palette_valid(palette_valid),
     .palette_index(palette_index),
-    .palette_rgb(palette_rgb)
+    .palette_rgb(palette_rgb),
+    .key_strobe(key_strobe),
+    .key_event(key_event)
 );
 
 // Palette store, read by the harness when it captures a frame. On the board this
