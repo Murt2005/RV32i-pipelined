@@ -200,6 +200,7 @@ static bool  tty_altscr = false;
 static void tty_leave_altscreen(void)
 {
     if (tty_altscr && tty_out) {
+        fputs("\033[?1006l\033[?1002l", tty_out); // stop mouse reporting first
         fputs("\033[?25h\033[?1049l", tty_out);   // show cursor, restore screen
         fflush(tty_out);
         tty_altscr = false;
@@ -211,6 +212,12 @@ static bool tui_open(void)
     tty_out = fopen("/dev/tty", "w");
     if (!tty_out) return false;
     fputs("\033[?1049h\033[?25l\033[2J", tty_out);  // alt screen, hide cursor, clear
+    // Mouse reporting, SGR encoding. Doom is a mouse game and clicking to
+    // shoot is the first thing anyone tries; without this the terminal keeps
+    // the clicks to itself and the gun never fires. 1002 is button press,
+    // release and drag -- not free motion, which at three frames a second
+    // would only flood the input queue with turns nobody asked for.
+    fputs("\033[?1002h\033[?1006h", tty_out);
     fflush(tty_out);
     tty_altscr = true;
     atexit(tty_leave_altscreen);
@@ -312,8 +319,15 @@ static void tui_draw(const uint8_t *fb, const uint32_t *palette,
         buf += "\033[0m\033[K\n";               // reset, clear to EOL
     }
 
-    snprintf(tmp, sizeof tmp, "frame %d  %.2f s  %.1f fps@50MHz  ",
-             frames, secs, cyc_delta ? 50e6 / (double)cyc_delta : 0.0);
+    // Real fps first, and the board projection labelled as a projection.
+    // Showing "37.9 fps" for something visibly redrawing three times a second
+    // is worse than showing nothing -- it reads as the frame rate you are
+    // looking at, when it is what this frame would cost on 50 MHz silicon.
+    snprintf(tmp, sizeof tmp,
+             "frame %d   %.1f fps here (%.2f s/frame)   %.1f fps projected@50MHz   ",
+             frames,
+             secs > 0 ? 1.0 / secs : 0.0, secs,
+             cyc_delta ? 50e6 / (double)cyc_delta : 0.0);
     buf += "\033[0m";
     buf += tmp;
     buf += "[q quit]\033[K";
@@ -503,6 +517,13 @@ int main(int argc, char **argv)
     int hold_frames = 2;
     if (const char *e = getenv("DOOM_HOLD")) hold_frames = atoi(e);
 
+    // DOOM_TRACE_INPUT=1 logs every event as it is queued and as it is handed
+    // to the key register, which is how a "the key did nothing" report gets
+    // narrowed to one of: never parsed, parsed but not queued, queued but not
+    // injected, or injected and ignored by Doom.
+    const bool trace_input = getenv("DOOM_TRACE_INPUT")
+                          && atoi(getenv("DOOM_TRACE_INPUT")) != 0;
+
     std::deque<KeyEvent> pending;     // live events, injected as soon as possible
     int held[256];                    // frames of hold left, per keycode
     for (int i = 0; i < 256; i++) held[i] = 0;
@@ -584,6 +605,60 @@ int main(int argc, char **argv)
             for (ssize_t i = 0; i < n; i++) {
                 if (buf[i] == 'q') { quit = true; break; }
 
+                // SGR mouse: ESC [ < button ; col ; row (M press | m release).
+                // Checked before the arrow case, which also starts ESC [.
+                if (buf[i] == 0x1b && i + 3 < n
+                    && buf[i + 1] == '[' && buf[i + 2] == '<') {
+                    ssize_t j = i + 3;
+                    int btn = 0, field = 0;
+                    while (j < n && buf[j] != 'M' && buf[j] != 'm') {
+                        if (buf[j] == ';')      field++;
+                        else if (field == 0 && buf[j] >= '0' && buf[j] <= '9')
+                            btn = btn * 10 + (buf[j] - '0');
+                        j++;
+                    }
+                    if (j >= n) break;             // sequence split across reads
+                    bool down = (buf[j] == 'M');
+                    // Low two bits pick the button; bit 5 (32) marks a drag,
+                    // which we treat as the button still being held.
+                    int which = btn & 3;
+                    if (!(btn & 64) && which != 3) {   // not a wheel event
+                        int code = (which == 0) ? DK_FIRE
+                                 : (which == 2) ? DK_USE : 0;
+                        // Traced to stdout, which in live mode is the log
+                        // rather than the screen. Without this there is no way
+                        // to tell "the terminal never sent the click" from
+                        // "the click arrived and Doom ignored it".
+                        printf("  mouse btn=%d %s -> code 0x%02x at frame %d\n",
+                               which, down ? "down" : "up", code, frames);
+                        fflush(stdout);
+                        if (code) {
+                            if (down) {
+                                if (held[code] == 0)
+                                    pending.push_back({0, 1, code});
+                                else if (trace_input)
+                                    printf("  (press dropped, held=%d)\n", held[code]);
+                                held[code] = hold_frames;
+                            }
+                            // The release is deliberately ignored: the hold set
+                            // by the press expires on its own, exactly as it
+                            // does for a key.
+                            //
+                            // A click is press-then-release within milliseconds
+                            // and a frame here lasts half a second, so both land
+                            // in one frame. Honouring the release at all -- even
+                            // deferred by a single frame boundary, which was the
+                            // first attempt -- means Doom reads down and then up
+                            // before G_BuildTiccmd next samples gamekeydown[],
+                            // and no shot is ever fired. Only a hold spanning
+                            // two boundaries survives, which is precisely what
+                            // hold_frames already gives every key.
+                        }
+                    }
+                    i = j;
+                    continue;
+                }
+
                 bool arrow = false;
                 // ESC [ X, and only when the rest of the sequence is already
                 // here -- otherwise this is the menu key.
@@ -610,6 +685,12 @@ int main(int argc, char **argv)
             KeyEvent e = pending.front(); pending.pop_front();
             top->key_strobe = 1;
             top->key_event  = (uint16_t)((e.pressed << 8) | (e.code & 0xFF));
+            if (trace_input) {
+                printf("  inject %s 0x%02x at frame %d cycle %llu\n",
+                       e.pressed ? "down" : "up", e.code, frames,
+                       (unsigned long long)main_time);
+                fflush(stdout);
+            }
         } else if (next_key < script.size() && script[next_key].frame <= frames) {
             top->key_strobe = 1;
             top->key_event  = (uint16_t)((script[next_key].pressed << 8)

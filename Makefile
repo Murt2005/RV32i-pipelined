@@ -393,7 +393,32 @@ run-sdram-hello: $(SDRAM_OUT)/hello.elf $(SIM_IVERILOG)
 # --------------------------------------------------------------------
 DOOM_DIR := tests/doom
 DOOM_SRC := $(DOOM_DIR)/src
-DOOM_OUT := build/tests/doom
+# The renderer flags are part of the output path, so each configuration gets its
+# own objects, binary and snapshot.
+#
+# This replaces three failed attempts at making flag changes invalidate a single
+# shared output directory. A stamp with a .PHONY prerequisite is stat'd before
+# any recipe runs; a merely-newer stamp loses to GNU Make 3.81's one-second
+# timestamp granularity; and deleting the objects on a flag change -- which did
+# work -- turned every invocation that omitted the flags into a wipe of the
+# flagged build, including `make -n`, because $(shell) runs at parse time even
+# in a dry run. Encoding the configuration in the path removes the question
+# entirely: nothing is ever stale, configurations coexist, and rebuilding one
+# cannot disturb another.
+#
+# The cost is disk: a full set per configuration, and a 64 MB snapshot each.
+# `rm -rf build/tests/doom-* build/doom/title-*.snap*` clears them.
+# Renderer cost, set at build time -- see tests/doom/doomgeneric_rv32.c.
+#   DOOM_DETAIL=1    low detail; half the columns drawn
+#   DOOM_BLOCKS=N    3D view size 3..11, 10 is the default full-width view
+#   DOOM_REALTIME=1  pace the game from mcycle instead of per drawn frame
+# Defined here rather than beside the CFLAGS because DOOM_CFG below expands
+# them immediately with := and would otherwise pick up empty values.
+DOOM_REALTIME ?= 0
+DOOM_DETAIL ?= 0
+DOOM_BLOCKS ?= 10
+DOOM_CFG := d$(DOOM_DETAIL)b$(DOOM_BLOCKS)rt$(DOOM_REALTIME)
+DOOM_OUT := build/tests/doom-$(DOOM_CFG)
 
 # The upstream object list, minus the platform backends (we supply our own) and
 # minus i_main.c, whose main() we replace.
@@ -414,7 +439,12 @@ DOOM_OBJS := $(addprefix $(DOOM_OUT)/,$(addsuffix .o,$(DOOM_NAMES))) \
 
 # CMAP256 selects the 8bpp path. NORMALUNIX and LINUX are what doomgeneric's own
 # ports define; they gate the POSIX-ish bits it expects to exist.
+# Renderer cost, set at build time -- see tests/doom/doomgeneric_rv32.c.
+#   DOOM_DETAIL=1   low detail; half the columns drawn
+#   DOOM_BLOCKS=N   3D view size 3..11, 10 is the default full-width view
+
 DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -mstrict-align \
+               -DDOOM_DETAIL=$(DOOM_DETAIL) -DDOOM_BLOCKS=$(DOOM_BLOCKS) -DDOOM_REALTIME=$(DOOM_REALTIME) \
                -DCMAP256 -DNORMALUNIX -DLINUX \
                -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
                -I$(DOOM_SRC) -ffunction-sections -fdata-sections \
@@ -424,6 +454,16 @@ DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -mstrict-align \
 
 .PHONY: doom doom-sim
 
+# A stamp recording the flags the objects were built with, so that changing a
+# flag rebuilds them.
+#
+# Objects otherwise depend on their source and nothing else, which makes
+# `make DOOM_DETAIL=1 doom` a silent no-op after a default build: make sees an
+# up-to-date .o and the flag does nothing at all. Not hypothetical -- it
+# invalidated a four-way benchmark here, in which every configuration measured
+# the same binary and returned identical cycle counts to the digit. Same shape
+# as the stale libmc.a that survived the ISA switch.
+#
 $(DOOM_OUT)/%.o: $(DOOM_SRC)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(DOOM_CFLAGS) -c $< -o $@
@@ -547,7 +587,10 @@ DOOM_FRAMES ?= 2
 # is done once and frozen. `doom-snapshot` boots to the title screen and
 # serialises the entire model; `doom-live` thaws it in about a second and hands
 # you the keyboard.
-DOOM_SNAP ?= build/doom/title.snap
+# Per-configuration, for the same reason DOOM_OUT is: a snapshot is Verilator's
+# serialisation of a model running one particular program image, so restoring
+# one taken from a different build is undefined rather than merely stale.
+DOOM_SNAP ?= build/doom/title-$(DOOM_CFG).snap
 
 # Frame 115, not frame 1, for two independent reasons. Doom melts the title
 # screen in over about a hundred frames and ignores input while that wipe runs,

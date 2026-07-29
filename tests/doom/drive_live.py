@@ -27,6 +27,12 @@ NAMED = {"ESC": b"\x1b", "ENTER": b"\r", "TAB": b"\t", "SPACE": b" "}
 NAMED.update({"UP": b"\x1b[A", "DOWN": b"\x1b[B",
               "RIGHT": b"\x1b[C", "LEFT": b"\x1b[D"})
 
+# SGR mouse, exactly as a terminal sends it: ESC [ < btn ; col ; row M/m.
+# CLICK is the press and release pair a real click produces.
+NAMED.update({"MDOWN": b"\x1b[<0;40;12M", "MUP": b"\x1b[<0;40;12m",
+              "CLICK": b"\x1b[<0;40;12M\x1b[<0;40;12m",
+              "RCLICK": b"\x1b[<2;40;12M\x1b[<2;40;12m"})
+
 
 def main(argv):
     if len(argv) < 3:
@@ -44,10 +50,13 @@ def main(argv):
     env["DOOM_KEYS"] = ""
     env["DOOM_LOAD"] = snap
 
+    # The build directory carries the renderer configuration in its name, so
+    # the caller has to say which one; there is no single "the" Doom build.
+    out = os.environ.get("DOOM_OUT_DIR", "build/tests/doom-d0b10rt0")
     cmd = ["./build/doom/Vtop",
-           "build/tests/doom/doom.sdram.bin",
+           f"{out}/doom.sdram.bin",
            "tests/doom/doom1.wad",
-           "build/tests/doom/doom.boot.bin",
+           f"{out}/doom.boot.bin",
            "0"]
 
     pid, fd = pty.fork()
