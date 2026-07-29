@@ -29,6 +29,8 @@
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
+#include <csignal>
 
 // Must match bus/memory_map.sv.
 static const uint32_t SDRAM_BASE = 0x80000000u;
@@ -171,6 +173,178 @@ static bool tty_make_raw(void)
     tty_raw = true;
     atexit(tty_restore);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing the framebuffer in the terminal.
+//
+// The point is to see the game while playing it, in the window the keystrokes
+// are already going to, with nothing installed. A window would mean SDL, and
+// SDL would mean the one machine that has it.
+//
+// Each character cell carries two pixels: U+2580 UPPER HALF BLOCK, foreground
+// for the top pixel and background for the bottom. That halves the vertical
+// squash and makes the cell roughly square, since terminal cells are about
+// twice as tall as they are wide.
+//
+// Output goes to /dev/tty rather than stdout, and that is the load-bearing
+// detail. top.sv:283 does `$write("%c", ...)` for the putchar MMIO, so Doom's
+// own text comes out of the RTL on stdout, underneath the harness. Rendering to
+// stdout would interleave the two and shred the picture. /dev/tty is the
+// controlling terminal whatever stdout has been redirected to, so the image
+// goes to the screen and the text goes to a log.
+// ---------------------------------------------------------------------------
+static FILE *tty_out    = nullptr;
+static bool  tty_altscr = false;
+
+static void tty_leave_altscreen(void)
+{
+    if (tty_altscr && tty_out) {
+        fputs("\033[?25h\033[?1049l", tty_out);   // show cursor, restore screen
+        fflush(tty_out);
+        tty_altscr = false;
+    }
+}
+
+static bool tui_open(void)
+{
+    tty_out = fopen("/dev/tty", "w");
+    if (!tty_out) return false;
+    fputs("\033[?1049h\033[?25l\033[2J", tty_out);  // alt screen, hide cursor, clear
+    fflush(tty_out);
+    tty_altscr = true;
+    atexit(tty_leave_altscreen);
+    return true;
+}
+
+// Truecolor where the terminal admits to it, the 256-colour cube otherwise.
+// Terminal.app is the case that matters here: it does 256 colours and silently
+// makes a mess of 24-bit escapes.
+static bool tui_truecolor(void)
+{
+    const char *ct = getenv("COLORTERM");
+    if (ct && (strstr(ct, "truecolor") || strstr(ct, "24bit"))) return true;
+    const char *t = getenv("TERM");
+    return t && strstr(t, "direct");
+}
+
+static int rgb_to_256(int r, int g, int b)
+{
+    // Greys are a separate ramp and much finer than the cube's diagonal, which
+    // matters for Doom -- a lot of the screen is smoke, shadow and status bar.
+    if (abs(r - g) < 12 && abs(g - b) < 12) {
+        if (r < 8)   return 16;
+        if (r > 248) return 231;
+        return 232 + (r - 8) * 24 / 240;
+    }
+    return 16 + 36 * (r * 5 / 255) + 6 * (g * 5 / 255) + (b * 5 / 255);
+}
+
+static void tui_draw(const uint8_t *fb, const uint32_t *palette,
+                     int frames, uint64_t cyc_delta, double secs)
+{
+    if (!tty_out) return;
+
+    struct winsize ws;
+    if (ioctl(fileno(tty_out), TIOCGWINSZ, &ws) != 0 || ws.ws_col == 0) {
+        ws.ws_col = 80;
+        ws.ws_row = 24;
+    }
+
+    // One row is kept for the status line. Two source pixels per cell row.
+    int avail_w = ws.ws_col;
+    int avail_h = (ws.ws_row - 1) * 2;
+    if (avail_w < 8 || avail_h < 8) return;
+
+    // Fit while preserving the 320x200 aspect.
+    double s = (double)avail_w / FB_W;
+    if ((double)avail_h / FB_H < s) s = (double)avail_h / FB_H;
+    int out_w = (int)(FB_W * s);
+    int out_h = (int)(FB_H * s) & ~1;          // even: cells are pixel pairs
+    if (out_w < 2 || out_h < 2) return;
+
+    const bool tc = tui_truecolor();
+
+    // Built in one buffer and written once. A cell at a time through fprintf
+    // is thousands of syscalls a frame and visibly tears.
+    static std::string buf;
+    buf.clear();
+    buf.reserve((size_t)out_w * out_h * 20);
+    buf += "\033[H";                            // home, not clear -- no flicker
+
+    char tmp[64];
+    for (int cy = 0; cy < out_h / 2; cy++) {
+        int last_fg = -1, last_bg = -1;
+        for (int cx = 0; cx < out_w; cx++) {
+            int sx = cx * FB_W / out_w;
+            int sy0 = (cy * 2)     * FB_H / out_h;
+            int sy1 = (cy * 2 + 1) * FB_H / out_h;
+            uint32_t top = palette[fb[sy0 * FB_W + sx]];
+            uint32_t bot = palette[fb[sy1 * FB_W + sx]];
+
+            int fg, bg;
+            if (tc) {
+                fg = (int)(top & 0xFFFFFF);
+                bg = (int)(bot & 0xFFFFFF);
+            } else {
+                fg = rgb_to_256((top >> 16) & 0xFF, (top >> 8) & 0xFF, top & 0xFF);
+                bg = rgb_to_256((bot >> 16) & 0xFF, (bot >> 8) & 0xFF, bot & 0xFF);
+            }
+
+            // Only re-state a colour when it actually changes. Doom has large
+            // flat regions and this cuts the output several-fold.
+            if (fg != last_fg) {
+                if (tc) snprintf(tmp, sizeof tmp, "\033[38;2;%d;%d;%dm",
+                                 (fg >> 16) & 0xFF, (fg >> 8) & 0xFF, fg & 0xFF);
+                else    snprintf(tmp, sizeof tmp, "\033[38;5;%dm", fg);
+                buf += tmp;
+                last_fg = fg;
+            }
+            if (bg != last_bg) {
+                if (tc) snprintf(tmp, sizeof tmp, "\033[48;2;%d;%d;%dm",
+                                 (bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF);
+                else    snprintf(tmp, sizeof tmp, "\033[48;5;%dm", bg);
+                buf += tmp;
+                last_bg = bg;
+            }
+            buf += "\xE2\x96\x80";              // U+2580
+        }
+        buf += "\033[0m\033[K\n";               // reset, clear to EOL
+    }
+
+    snprintf(tmp, sizeof tmp, "frame %d  %.2f s  %.1f fps@50MHz  ",
+             frames, secs, cyc_delta ? 50e6 / (double)cyc_delta : 0.0);
+    buf += "\033[0m";
+    buf += tmp;
+    buf += "[q quit]\033[K";
+
+    fwrite(buf.data(), 1, buf.size(), tty_out);
+    fflush(tty_out);
+}
+
+// Put the terminal back on the way out, however we are leaving.
+//
+// atexit() alone is not enough and the gap is not hypothetical: it does not run
+// when the process is signalled, and ^C is the obvious way to quit something
+// that has taken over the screen. Without this, quitting leaves the terminal in
+// raw mode -- no echo, no line editing, no cursor, still on the alternate
+// screen -- and the only fix is `reset` typed blind. Restoring is idempotent
+// and the handlers only touch async-signal-safe calls before re-raising, so the
+// exit status still reflects the signal.
+static void fatal_signal(int sig)
+{
+    tty_leave_altscreen();
+    tty_restore();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void install_signal_handlers(void)
+{
+    // SIGHUP matters as much as SIGINT here: closing the terminal window, or a
+    // dropped ssh session, arrives that way.
+    for (int s : {SIGINT, SIGTERM, SIGHUP, SIGQUIT})
+        signal(s, fatal_signal);
 }
 
 // doomkeys.h. Repeated here rather than included because the harness is host
@@ -319,6 +493,7 @@ int main(int argc, char **argv)
     // Live mode. DOOM_LIVE=1, and stdin must actually be a terminal -- under a
     // pipe or in CI there is nothing to read and raw mode would be wrong.
     bool live = getenv("DOOM_LIVE") && atoi(getenv("DOOM_LIVE")) != 0;
+    install_signal_handlers();
     if (live && !tty_make_raw()) {
         fprintf(stderr, "DOOM_LIVE set but stdin is not a terminal; ignoring\n");
         live = false;
@@ -333,7 +508,23 @@ int main(int argc, char **argv)
     for (int i = 0; i < 256; i++) held[i] = 0;
     bool quit = false;
 
-    if (live) printf("%s", live_help);
+    // Draw in the terminal. On by default in live mode -- an interactive run
+    // that shows nothing is not interactive -- and available on its own for
+    // watching a scripted run go past.
+    bool tui = live;
+    if (const char *e = getenv("DOOM_TUI")) tui = atoi(e) != 0;
+    if (tui && !tui_open()) {
+        fprintf(stderr, "cannot open /dev/tty for display\n");
+        tui = false;
+    }
+
+    // Writing two 64 KB files per frame is pure overhead if nobody is going to
+    // look at them. It stays on by default so a session still leaves something
+    // doom-gif can use.
+    bool capture = true;
+    if (const char *e = getenv("DOOM_CAPTURE")) capture = atoi(e) != 0;
+
+    if (live && !tui) printf("%s", live_help);
 
     // One terminal byte -> one Doom keycode. Returns 0 for keys we do not map.
     auto map_key = [](unsigned char c, bool arrow) -> int {
@@ -439,22 +630,26 @@ int main(int argc, char **argv)
             for (int i = 0; i < FB_W * FB_H; i++)
                 frame[i] = mem_read8(LANES(fb_mem), (uint32_t)i);
 
-            // Raw palette indices alongside the colour image. An all-black PPM
-            // is ambiguous -- it means either nothing was drawn or the palette
-            // never arrived -- and these two files tell those apart at a glance.
-            char path[256];
-            snprintf(path, sizeof path, "build/doom/frame%03d.idx", frames);
-            FILE *rf = fopen(path, "wb");
-            if (rf) { fwrite(frame.data(), 1, frame.size(), rf); fclose(rf); }
-
-            int nonzero_idx = 0, nonzero_pal = 0;
-            for (size_t i = 0; i < frame.size(); i++) if (frame[i]) nonzero_idx++;
+            int nonzero_pal = 0;
             for (int i = 0; i < 256; i++) if (palette[i]) nonzero_pal++;
-            printf("  indices non-zero: %d/%zu, palette entries set: %d/256\n",
-                   nonzero_idx, frame.size(), nonzero_pal);
 
-            snprintf(path, sizeof path, "build/doom/frame%03d.ppm", frames);
-            write_ppm(path, frame.data(), palette);
+            char path[256];
+            if (capture) {
+                // Raw palette indices alongside the colour image. An all-black
+                // PPM is ambiguous -- it means either nothing was drawn or the
+                // palette never arrived -- and these two tell those apart.
+                snprintf(path, sizeof path, "build/doom/frame%03d.idx", frames);
+                FILE *rf = fopen(path, "wb");
+                if (rf) { fwrite(frame.data(), 1, frame.size(), rf); fclose(rf); }
+
+                int nonzero_idx = 0;
+                for (size_t i = 0; i < frame.size(); i++) if (frame[i]) nonzero_idx++;
+                printf("  indices non-zero: %d/%zu, palette entries set: %d/256\n",
+                       nonzero_idx, frame.size(), nonzero_pal);
+
+                snprintf(path, sizeof path, "build/doom/frame%03d.ppm", frames);
+                write_ppm(path, frame.data(), palette);
+            }
 
             // Two rates, and they answer different questions. Cycles per frame
             // is what the board will do; seconds per frame is what this
@@ -467,6 +662,10 @@ int main(int argc, char **argv)
                    frames, (unsigned long long)main_time,
                    (unsigned long long)dc, now - t_frame,
                    dc ? 50e6 / (double)dc : 0.0);
+
+            if (tui)
+                tui_draw(frame.data(), palette, frames, dc, now - t_frame);
+
             t_frame = now;
             cyc_frame = main_time;
             frames++;

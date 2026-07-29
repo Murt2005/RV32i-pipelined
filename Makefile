@@ -565,15 +565,44 @@ $(DOOM_SNAP): build/doom/Vtop doom
 
 doom-snapshot: $(DOOM_SNAP)
 
+# The game is drawn in this terminal, so make it a reasonable size first -- the
+# picture is fitted to the window and a small window gets a small picture.
+#
+# stdout goes to a log rather than the screen, and that is required rather than
+# tidy: top.sv writes the putchar MMIO with $write, so Doom's own text comes out
+# of the RTL on stdout and would be printed straight through the image. The
+# renderer draws to /dev/tty instead, which is the terminal regardless of where
+# stdout has been pointed.
+#
 # Frames still land in build/doom as they are drawn, so a session leaves a
-# record of itself; doom-png turns them into something viewable afterwards.
+# record; doom-gif turns it into something watchable afterwards.
 doom-live: build/doom/Vtop doom $(DOOM_SNAP)
 	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
-	DOOM_KEYS= DOOM_LIVE=1 DOOM_LOAD=$(DOOM_SNAP) \
+	@printf '  arrows/WASD move   , . strafe   space use   f fire\n'
+	@printf '  enter select   esc menu   tab map   y yes   q quit\n'
+	@printf '  text output goes to build/doom/doom.log\n\n'
+	@DOOM_KEYS= DOOM_LIVE=1 DOOM_LOAD=$(DOOM_SNAP) \
+	RV32_MEM_LATENCY=$(DOOM_LATENCY) RV32_STALL_RATE=$(DOOM_STALL) \
+	DOOM_CAPTURE=$(DOOM_CAPTURE) \
+	./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
+		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin 0 \
+		> build/doom/doom.log 2>&1 || true
+	@tail -1 build/doom/doom.log
+
+# Set to 0 to stop writing a PPM and an IDX per frame. Worth it only if you are
+# not going to make a GIF of the session afterwards.
+DOOM_CAPTURE ?= 1
+
+# Watch a scripted run go past in the terminal instead of playing it.
+.PHONY: doom-watch
+doom-watch: build/doom/Vtop doom $(DOOM_SNAP)
+	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
+	@DOOM_KEYS=$(DOOM_KEYS) DOOM_TUI=1 DOOM_LOAD=$(DOOM_SNAP) \
 	RV32_MEM_LATENCY=$(DOOM_LATENCY) RV32_STALL_RATE=$(DOOM_STALL) \
 	./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
-		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin 0
-	@$(MAKE) --no-print-directory doom-png
+		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin $(DOOM_FRAMES) \
+		> build/doom/doom.log 2>&1 || true
+	@tail -1 build/doom/doom.log
 
 # --------------------------------------------------------------------
 # Official riscv-tests rv32um suite (M extension).
