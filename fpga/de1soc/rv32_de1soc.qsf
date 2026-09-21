@@ -140,18 +140,24 @@ set_global_assignment -name SYSTEMVERILOG_FILE fb_ram.sv
 # textually unchanged without it -- `make cycle-check` reports identical counts
 # across all 103 tests either way.
 set_global_assignment -name VERILOG_MACRO "BOARD_TOP=1"
-set_global_assignment -name SYSTEMVERILOG_FILE ../../top.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../cpu.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../divider.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../memory.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../memory_io.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../riscv.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../riscv32_common.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../base.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../system.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../bus/memory_map.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../bus/decoder.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../bus/mmio.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../bus/arbiter.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../bus/icache.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ../../bus/dcache.sv
+# Every `include in rtl/ names a bare file, so each directory has to be on the
+# search path -- the same list the simulation Makefile passes as -I.
+set_global_assignment -name SEARCH_PATH ../../rtl
+set_global_assignment -name SEARCH_PATH ../../rtl/core
+set_global_assignment -name SEARCH_PATH ../../rtl/mem
+set_global_assignment -name SEARCH_PATH ../../rtl/bus
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/core/cpu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/core/divider.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/core/riscv.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/core/riscv32_common.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/core/base.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/core/system.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/mem/memory.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/mem/memory_io.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/bus/memory_map.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/bus/decoder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/bus/mmio.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/bus/arbiter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/bus/icache.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/bus/dcache.sv

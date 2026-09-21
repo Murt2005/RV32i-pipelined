@@ -1,12 +1,12 @@
 `include "base.sv"
 `include "memory.sv"
 `include "memory_delay.sv"
-`include "bus/memory_map.sv"
-`include "bus/decoder.sv"
-`include "bus/mmio.sv"
-`include "bus/arbiter.sv"
-`include "bus/icache.sv"
-`include "bus/dcache.sv"
+`include "memory_map.sv"
+`include "decoder.sv"
+`include "mmio.sv"
+`include "arbiter.sv"
+`include "icache.sv"
+`include "dcache.sv"
 `include "cpu.sv"
 
 // stall_rate drives the core's stall input from an LFSR, `stall_rate`/256 of

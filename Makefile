@@ -56,7 +56,7 @@ STALL_RATE ?= 0
 # overlap.
 MEM_LATENCY ?= 0
 
-# Simulator watchdog in cycles. Matches itop.sv's own default, but has to be
+# Simulator watchdog in cycles. Matches sim/itop.sv's own default, but has to be
 # raised when the memory is slowed down: at MEM_LATENCY=16 a directed test takes
 # ~85x the cycles it does at 0, so the default turns a passing run into a
 # timeout that looks like a hang.
@@ -93,21 +93,23 @@ dumphex: dumphex.c
 # Every RTL file the simulator pulls in, in one list. It was previously spelled
 # out per target and had already fallen behind -- a missing entry means make
 # reports "up to date" and silently runs the old binary, which looks exactly like
-# the edit having no effect.
-RTL_CORE := top.sv cpu.sv memory.sv memory_delay.sv memory_io.sv \
-            riscv.sv riscv32_common.sv base.sv system.sv divider.sv \
-            bus/memory_map.sv bus/decoder.sv bus/mmio.sv bus/arbiter.sv bus/icache.sv bus/dcache.sv
-RTL_SRC  := itop.sv $(RTL_CORE)
+# the edit having no effect. A wildcard cannot fall behind.
+#
+# Every `include names a bare file, so the include path is what resolves them.
+RTL_DIRS := rtl rtl/core rtl/mem rtl/bus
+RTL_INC  := $(addprefix -I,$(RTL_DIRS))
+RTL_CORE := $(foreach d,$(RTL_DIRS),$(wildcard $(d)/*.sv))
+RTL_SRC  := sim/itop.sv $(RTL_CORE)
 
 $(SIM_IVERILOG): $(RTL_SRC)
 	mkdir -p $(dir $@)
-	$(IVERILOG) -g2012 -o $@ itop.sv
+	$(IVERILOG) -g2012 $(RTL_INC) -o $@ sim/itop.sv
 
 # Same design with the RVFI commit port enabled. Separate binary so the normal
 # simulator, and the synthesised build, carry none of the instrumentation.
 build/sim/result-rvfi: $(RTL_SRC)
 	mkdir -p $(dir $@)
-	$(IVERILOG) -g2012 -DRVFI -o $@ itop.sv
+	$(IVERILOG) -g2012 $(RTL_INC) -DRVFI -o $@ sim/itop.sv
 
 # RVFI_LATENCY sweeps the commit record against a slow memory as well as a fast
 # one. The record has to be right in both cases and, until this existed, only the
@@ -471,7 +473,7 @@ doom: $(DOOM_OUT)/doom.sdram.bin $(DOOM_OUT)/doom.boot.bin
 # runs for billions of cycles. It is a plain `=`, so overriding it means passing
 # it on the sub-make command line, which in turn means not using --build.
 #
-# SYNTHESIS. Compiles out the `ifndef SYNTHESIS` checkers in cpu.sv, the caches
+# SYNTHESIS. Compiles out the `ifndef SYNTHESIS` checkers in rtl/core/cpu.sv, the caches
 # and the arbiter. Those are worth their cost in the suites that exist to catch
 # things and they still run there -- run-tests-iverilog, the verilator test top,
 # rvfi-check and formal all keep them. Paying for them again here buys nothing,
@@ -500,7 +502,7 @@ build/doom/Vtop: $(RTL_CORE) $(DOOM_DIR)/doom_sim.cpp
 	$(VERILATOR) -O3 --cc --top-module top -Wno-fatal \
 		-Gsdram_bytes=67108864 --savable \
 		--x-assign fast --x-initial fast $(DOOM_VDEFS) \
-		--Mdir build/doom top.sv $(DOOM_DIR)/doom_sim.cpp --exe -o Vtop
+		--Mdir build/doom $(RTL_INC) rtl/top.sv $(DOOM_DIR)/doom_sim.cpp --exe -o Vtop
 	$(MAKE) -C build/doom -f Vtop.mk -j$(DOOM_JOBS) \
 		OPT_FAST="-O3 $(DOOM_NATIVE)" OPT_GLOBAL="-O2"
 
@@ -595,7 +597,7 @@ doom-snapshot: $(DOOM_SNAP)
 # picture is fitted to the window and a small window gets a small picture.
 #
 # stdout goes to a log rather than the screen, and that is required rather than
-# tidy: top.sv writes the putchar MMIO with $write, so Doom's own text comes out
+# tidy: rtl/top.sv writes the putchar MMIO with $write, so Doom's own text comes out
 # of the RTL on stdout and would be printed straight through the image. The
 # renderer draws to /dev/tty instead, which is the terminal regardless of where
 # stdout has been pointed.
@@ -704,10 +706,10 @@ dhrystone: $(DHRY_OUT)/dhrystone.elf
 # --------------------------------------------------------------------
 .PHONY: coverage
 
-build/cov/Vtop: $(RTL_CORE) verilator_top.cpp
+build/cov/Vtop: $(RTL_CORE) sim/verilator_top.cpp
 	mkdir -p build/cov
 	$(VERILATOR) -O0 --cc --build --top-module top --coverage \
-		--Mdir build/cov -Wno-fatal top.sv verilator_top.cpp --exe \
+		--Mdir build/cov -Wno-fatal $(RTL_INC) rtl/top.sv sim/verilator_top.cpp --exe \
 		-o Vtop
 
 coverage: build/cov/Vtop $(TOOLS) riscv-tests

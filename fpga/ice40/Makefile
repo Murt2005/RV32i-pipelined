@@ -11,6 +11,7 @@
 TOP        := rv32_top
 PCF        := $(TOP).pcf
 ROOT       := ../..
+RTL        := $(ROOT)/rtl
 
 # Identifies exactly which RTL this bitstream was built from, so the host can
 # refuse to talk to a stale one. The file list is shared with rv32_host.py.
@@ -25,10 +26,10 @@ BUILD      := build
 # statement, no $bits(type_name), and does not resolve package typedefs used as
 # declaration types. sv2v lowers all of that to Verilog-2005.
 SV_SRC     := $(TOP).sv uart.sv memory_spram.sv \
-              $(ROOT)/cpu.sv $(ROOT)/memory_io.sv $(ROOT)/base.sv \
-              $(ROOT)/system.sv $(ROOT)/riscv.sv $(ROOT)/riscv32_common.sv
+              $(RTL)/core/cpu.sv $(RTL)/mem/memory_io.sv $(RTL)/core/base.sv \
+              $(RTL)/core/system.sv $(RTL)/core/riscv.sv $(RTL)/core/riscv32_common.sv
 
-INC        := -I$(ROOT) -I.
+INC        := -I$(RTL)/core -I$(RTL)/mem -I.
 
 # The RTL carries simulation-only protocol checkers behind `ifndef SYNTHESIS.
 # Nothing defines it for us -- sv2v and yosys both leave it undefined -- so
@@ -46,9 +47,7 @@ DFU_VID_PID := 1209:b1c0
 all: $(BUILD)/$(TOP).bin
 
 # ---- 1. SystemVerilog -> Verilog-2005 -------------------------------------
-$(BUILD)/$(TOP).v: $(TOP).sv uart.sv memory_spram.sv $(ROOT)/cpu.sv \
-                   $(ROOT)/riscv32_common.sv $(ROOT)/memory_io.sv \
-                   $(ROOT)/base.sv $(ROOT)/system.sv $(ROOT)/riscv.sv
+$(BUILD)/$(TOP).v: $(SV_SRC)
 	@mkdir -p $(BUILD)
 	sv2v $(INC) $(DEFS) --write=$@ $(TOP).sv
 
@@ -98,7 +97,7 @@ time: $(BUILD)/$(TOP).asc
 
 lint:
 	verilator --lint-only -Wall --top-module $(TOP) $(INC) \
-		$(TOP).sv uart.sv memory_spram.sv $(ROOT)/cpu.sv 2>&1 | head -60
+		$(TOP).sv uart.sv memory_spram.sv $(RTL)/core/cpu.sv 2>&1 | head -60
 
 # ---- board-level simulation ----------------------------------------------
 # Simulates the same RTL that gets synthesized, including a behavioural model

@@ -3,7 +3,7 @@
 
 `include "system.sv"
 `include "memory_io.sv"
-`include "bus/memory_map.sv"
+`include "memory_map.sv"
 
 // ---------------------------------------------------------------------------
 // Address decode and response steering for one initiator port.

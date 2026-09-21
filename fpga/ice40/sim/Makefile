@@ -13,7 +13,7 @@ ROOT   := ../../..
 IVERILOG ?= iverilog
 TEST   ?= isa/add_sub
 
-INC    := -I. -I.. -I$(ROOT)
+INC    := -I. -I.. -I$(ROOT)/rtl/core -I$(ROOT)/rtl/mem
 SIM    := tb_rv32_top
 HEX    := $(ROOT)/build/hex/ice40/$(TEST)
 
@@ -24,7 +24,7 @@ TESTS_STEMS := $(patsubst $(ROOT)/tests/%.s,%,$(TESTS_S))
 .PHONY: run run-all clean
 
 $(SIM): tb_rv32_top.sv ../rv32_top.sv ../uart.sv ../memory_spram.sv \
-        sb_spram256ka.sv $(ROOT)/cpu.sv $(ROOT)/riscv32_common.sv
+        sb_spram256ka.sv $(wildcard $(ROOT)/rtl/core/*.sv) $(ROOT)/rtl/mem/memory_io.sv
 	$(IVERILOG) -g2012 $(INC) -o $@ tb_rv32_top.sv
 
 # Build the test image in the repo root, then run it here against the board top.
