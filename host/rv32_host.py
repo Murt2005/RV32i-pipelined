@@ -416,7 +416,7 @@ def sim_output(stem, repo_root):
     for line in r.stdout.splitlines():
         if line.startswith("==="):
             keep = True
-        if keep and not line.startswith(("make", "cp ", "mkdir", "/bin/bash",
+        if keep and not line.startswith(("make", "cd ", "mkdir", "/bin/bash",
                                          "./build", "WARNING", "VCD", "rm ")):
             if "$finish called" in line:
                 break

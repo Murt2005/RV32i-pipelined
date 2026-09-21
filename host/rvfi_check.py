@@ -67,9 +67,11 @@ def run_sim_images(text, data, repo_root, timeout_cycles=200000, sim_args=()):
 
 
 def run_sim(elf, repo_root, timeout_cycles=200000, sim_args=()):
-    subprocess.run(["/bin/bash", "./elftohex.sh", elf, "."],
-                   cwd=repo_root, capture_output=True)
-    return _run_sim_binary(repo_root, timeout_cycles, sim_args)
+    with tempfile.TemporaryDirectory(prefix="rv32sim-") as work:
+        subprocess.run(["/bin/bash", "./elftohex.sh", os.path.abspath(elf), work],
+                       cwd=repo_root, capture_output=True)
+        sim = os.path.abspath(os.path.join(repo_root, SIM))
+        return _run_sim_binary(work, timeout_cycles, sim_args, sim=sim)
 
 
 def _run_sim_binary(work_dir, timeout_cycles, sim_args=(), sim=None):

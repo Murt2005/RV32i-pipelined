@@ -38,6 +38,12 @@ TESTS_RUN_NAMES := $(subst /,-,$(TESTS_STEMS))
 
 SIM_IVERILOG := build/sim/result-iverilog
 
+# memory.sv reads code0.hex..data3.hex (and sdram0..3.hex) from the simulator's
+# working directory. Each program's images go in their own directory here and
+# the simulator runs from it, so nothing is written to the repo root and runs
+# never pick up each other's images.
+HEX := build/hex
+
 # Pipeline stall rate out of 256 for simulation runs; 0 disables.
 #   make run-tests-iverilog STALL_RATE=128
 STALL_RATE ?= 0
@@ -121,10 +127,8 @@ rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests
 
 # Run one test by stem under tests/ (e.g. TEST_STEM=isa/add_sub)
 run-one-iverilog: $(TOOLS) $(SIM_IVERILOG)
-	/bin/bash ./elftohex.sh build/tests/$(TEST_STEM).elf .
-	mkdir -p build/hex/$(TEST_STEM)
-	cp code0.hex code1.hex code2.hex code3.hex data0.hex data1.hex data2.hex data3.hex build/hex/$(TEST_STEM)/
-	./$(SIM_IVERILOG) $(SIM_ARGS)
+	/bin/bash ./elftohex.sh build/tests/$(TEST_STEM).elf $(HEX)/$(TEST_STEM)
+	cd $(HEX)/$(TEST_STEM) && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS)
 
 # Friendly per-test targets, e.g. run-test-isa-add_sub-iverilog
 run-test-%-iverilog: $(TOOLS) $(SIM_IVERILOG)
@@ -250,8 +254,9 @@ riscv-tests: $(RVTESTS_ELF)
 run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
-		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
-		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		d=$(HEX)/riscv-tests/$$t; \
+		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf $$d >/dev/null 2>&1; \
+		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "PASS" ]; then \
@@ -283,8 +288,9 @@ riscv-tests-p: $(RVTESTS_P_ELF)
 run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
-		/bin/bash ./elftohex.sh build/riscv-tests-p/$$t.elf . >/dev/null 2>&1; \
-		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		d=$(HEX)/riscv-tests-p/$$t; \
+		/bin/bash ./elftohex.sh build/riscv-tests-p/$$t.elf $$d >/dev/null 2>&1; \
+		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		out=`echo "$$raw" | grep -oE 'TOHOST=[0-9]+' | head -1`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "TOHOST=1" ]; then \
@@ -346,8 +352,9 @@ sdram-progs: $(SDRAM_OUT)/hello.elf
 # The SDRAM image needs three regions rather than two, so it does not go through
 # elftohex.sh.
 run-sdram-hello: $(SDRAM_OUT)/hello.elf $(SIM_IVERILOG)
-	python3 host/elf_to_sdram_hex.py $(SDRAM_OUT)/hello.elf .
-	./$(SIM_IVERILOG) $(SIM_ARGS)
+	@mkdir -p $(HEX)/sdram/hello
+	python3 host/elf_to_sdram_hex.py $(SDRAM_OUT)/hello.elf $(HEX)/sdram/hello
+	cd $(HEX)/sdram/hello && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS)
 
 # --------------------------------------------------------------------
 # Doom.
@@ -645,8 +652,9 @@ riscv-tests-m: $(RVTESTS_M_ELF)
 run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
 	@pass=0; fail=0; \
 	for t in $(RVTESTS_M); do \
-		/bin/bash ./elftohex.sh build/riscv-tests-m/$$t.elf . >/dev/null 2>&1; \
-		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		d=$(HEX)/riscv-tests-m/$$t; \
+		/bin/bash ./elftohex.sh build/riscv-tests-m/$$t.elf $$d >/dev/null 2>&1; \
+		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "PASS" ]; then \
@@ -707,20 +715,21 @@ coverage: build/cov/Vtop $(TOOLS) riscv-tests
 	@set -e; n=0; \
 	for t in $(TESTS_STEMS); do \
 		$(MAKE) -s build/tests/$$t.elf >/dev/null; \
-		/bin/bash ./elftohex.sh build/tests/$$t.elf . >/dev/null 2>&1; \
-		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`.dat \
-			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
-		RV32_STALL_RATE=128 \
-		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`-stall.dat \
-			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
-		RV32_MEM_LATENCY=4 RV32_STALL_RATE=128 RV32_MAX_CYCLES=20000000 \
-		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`-lat.dat \
-			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
+		d=$(HEX)/$$t; c=$(CURDIR)/build/cov/dat/`echo $$t | tr / -`; \
+		/bin/bash ./elftohex.sh build/tests/$$t.elf $$d >/dev/null 2>&1; \
+		(cd $$d && RV32_COVERAGE_FILE=$$c.dat \
+			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
+		(cd $$d && RV32_STALL_RATE=128 RV32_COVERAGE_FILE=$$c-stall.dat \
+			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
+		(cd $$d && RV32_MEM_LATENCY=4 RV32_STALL_RATE=128 RV32_MAX_CYCLES=20000000 \
+			RV32_COVERAGE_FILE=$$c-lat.dat \
+			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 	done; \
 	for t in $(RVTESTS); do \
-		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
-		RV32_COVERAGE_FILE=build/cov/dat/rv32ui-$$t.dat \
-			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
+		d=$(HEX)/riscv-tests/$$t; \
+		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf $$d >/dev/null 2>&1; \
+		(cd $$d && RV32_COVERAGE_FILE=$(CURDIR)/build/cov/dat/rv32ui-$$t.dat \
+			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 	done; \
 	echo "ran $$n programs"
 	@verilator_coverage --write build/cov/merged.dat build/cov/dat/*.dat >/dev/null
