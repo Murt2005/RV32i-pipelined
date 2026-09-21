@@ -40,7 +40,7 @@ module top #(
 // palette is readable by the DAC side.
 //
 // `ifdef rather than a parameter with a generate block, and that is not a
-// stylistic choice. tests/doom/doom_sim.cpp reaches into this hierarchy by
+// stylistic choice. sim/doom_sim.cpp reaches into this hierarchy by
 // flattened name -- top__DOT__sdram__DOT__mem__DOT__data0 and the same for
 // fb_mem -- to load the program and read out frames. A generate block inserts a
 // scope, every one of those paths changes, and the Doom harness stops working

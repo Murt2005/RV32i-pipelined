@@ -12,7 +12,7 @@
 // binary PPM with the palette applied -- no image library, no dependencies, and
 // a format anything can open.
 //
-//   build/doom/doom_sim <program.elf.sdram.bin> <doom1.wad> [max-frames]
+//   build/doom/Vtop <doom.sdram.bin> <doom1.wad> <doom.boot.bin> [max-frames]
 
 #include <verilated.h>
 #include <verilated_save.h>

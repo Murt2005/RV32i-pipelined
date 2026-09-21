@@ -8,13 +8,13 @@ streams back whatever the program writes to the putchar MMIO register.
 Typical use:
 
     # probe the link and report what answered
-    python3 host/rv32_host.py --probe
+    python3 tools/rv32_host.py --probe
 
     # run one test built by the repo's normal flow
-    python3 host/rv32_host.py --elf build/tests/isa/add_sub.elf
+    python3 tools/rv32_host.py --elf build/tests/isa/add_sub.elf
 
     # run the whole regression against silicon and diff against simulation
-    python3 host/rv32_host.py --regress
+    python3 tools/rv32_host.py --regress
 
 Port selection: both CDC ports report the same product string on macOS, so
 there is no reliable way to tell the bridged one from the log one. With no
@@ -472,7 +472,7 @@ def do_bench(board, elf, timeout):
     return 0
 
 
-DHRYSTONE_ELF = "build/tests/bench/dhrystone/dhrystone.elf"
+DHRYSTONE_ELF = "build/sw/bench/dhrystone/dhrystone.elf"
 # 1 DMIPS is 1757 Dhrystones/second, the VAX 11/780 reference.
 VAX_DHRYSTONES = 1757.0
 

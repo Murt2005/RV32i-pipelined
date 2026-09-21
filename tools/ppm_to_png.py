@@ -7,7 +7,7 @@ interesting way. Nothing on macOS opens PPM, though, so this converts them --
 also with no library, since PNG's required encoding is deflate and zlib is in
 the standard library.
 
-    python3 host/ppm_to_png.py build/doom/*.ppm
+    python3 tools/ppm_to_png.py build/doom/*.ppm
 """
 
 import struct

@@ -7,7 +7,7 @@ The harness only enables live input when stdin is a terminal, which is correct
 cannot test the thing. This allocates a real pty, so isatty() is true and the
 keys go in exactly as if they had been typed.
 
-    python3 tests/doom/drive_live.py build/doom/title.snap \\
+    python3 sw/doom/drive_live.py build/doom/title.snap \\
         1.0:ESC 3.0:ENTER 3.0:ENTER 3.0:ENTER 6.0:www 6.0:q
 
 Each argument is <delay-seconds>:<keys>, the delay being measured from the
@@ -52,10 +52,10 @@ def main(argv):
 
     # The build directory carries the renderer configuration in its name, so
     # the caller has to say which one; there is no single "the" Doom build.
-    out = os.environ.get("DOOM_OUT_DIR", "build/tests/doom-d0b10rt0")
+    out = os.environ.get("DOOM_OUT_DIR", "build/sw/doom-d0b10rt0")
     cmd = ["./build/doom/Vtop",
            f"{out}/doom.sdram.bin",
-           "tests/doom/doom1.wad",
+           "sw/doom/doom1.wad",
            f"{out}/doom.boot.bin",
            "0"]
 

@@ -9,17 +9,18 @@
 # directory under build/: sharing one means two runs in parallel silently read
 # each other's program.
 
-here="$(cd "$(dirname "$0")" && pwd)"
-source "$here/site-config.sh"
+root="$(cd "$(dirname "$0")/.." && pwd)"
+source "$root/site-config.sh"
+dumphex="$root/build/tools/dumphex"     # `make build/tools/dumphex`
 
 elf="$1"
 out="${2:?usage: elftohex.sh <elf> <out-dir>}"
 mkdir -p "$out"
 
 $RISCV_PREFIX-objcopy -O binary -j .text -g "$elf" "$elf.bin"
-"$here/dumphex" -i "$elf.bin" -o "$out/code" -base 0 -size 0x10000 -strip -byte
+"$dumphex" -i "$elf.bin" -o "$out/code" -base 0 -size 0x10000 -strip -byte
 rm "$elf.bin"
 
 $RISCV_PREFIX-objcopy -O binary -R .text -g "$elf" "$elf.bin"
-"$here/dumphex" -i "$elf.bin" -o "$out/data" -base 0 -size 0x10000 -strip -byte
+"$dumphex" -i "$elf.bin" -o "$out/data" -base 0 -size 0x10000 -strip -byte
 rm "$elf.bin"

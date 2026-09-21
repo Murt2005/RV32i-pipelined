@@ -5,7 +5,7 @@
 # and then moves, which is enough to exercise the 3D renderer rather than a
 # static title screen.
 #
-# Codes are from tests/doom/src/doomkeys.h:
+# Codes are from sw/doom/src/doomkeys.h:
 #   0x0d ENTER   0x1b ESCAPE   0xad UP   0xae RIGHT   0xa3 FIRE   0xa2 USE
 
 # Doom melts the title screen in over roughly a hundred rendered frames, and
@@ -23,6 +23,10 @@
 111  down 0x0d
 112  up   0x0d
 
-# No movement at all after this point. The player stands still at the level
-# entrance, so every frame renders an identical view -- which is the only way to
-# compare frame cost between two runs whose timing differs.
+# In the level now: walk forward for a while, so the renderer has real geometry
+# to draw rather than a menu overlay.
+120  down 0xad
+140  up   0xad
+# Turn, to change what is on screen.
+142  down 0xae
+150  up   0xae

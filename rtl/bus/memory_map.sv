@@ -31,7 +31,7 @@
 // `.align 6` tohost.
 //
 // Keeping the two legacy regions at their old addresses *and* at one cycle is
-// deliberate: ld.script, both riscv-tests linker scripts and the core's reset PC
+// deliberate: tests/common/link.ld, both riscv-tests linker scripts and the core's reset PC
 // are unchanged, so the entire existing regression suite runs through the new
 // decoder without taking a single extra cycle. That makes "the decoder changed
 // nothing" a checkable claim rather than a hope.

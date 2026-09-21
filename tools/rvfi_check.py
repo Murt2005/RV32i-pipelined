@@ -5,12 +5,12 @@ Cross-check the core's RVFI commit record against the reference model.
 riscv-formal reasons entirely about what the RVFI port reports, so a wrong RVFI
 record produces confident nonsense in both directions: real bugs hidden, and
 proofs that mean nothing. This validates the record itself before any of that,
-by replaying every retired instruction through host/rv32_model.py and comparing
+by replaying every retired instruction through tools/rv32_model.py and comparing
 the fields the formal checks depend on.
 
     make build/sim/result-rvfi
-    python3 host/rvfi_check.py build/tests/isa/add_sub.elf
-    python3 host/rvfi_check.py --all
+    python3 tools/rvfi_check.py build/tests/isa/add_sub.elf
+    python3 tools/rvfi_check.py --all
 """
 
 import argparse
@@ -40,7 +40,7 @@ FIELDS = ("order pc_rdata pc_wdata insn rs1_addr rs1_rdata rs2_addr rs2_rdata "
 def write_hex(image, prefix, out_dir):
     """Write a memory image as the four byte-lane hex files memory.sv reads.
 
-    dumphex normally does this from an ELF via objcopy. Writing it directly lets
+    tools/dumphex normally does this from an ELF via objcopy. Writing it directly lets
     a caller simulate a program it generated in memory, with no ELF and no
     assembler in the loop.
     """
@@ -68,7 +68,7 @@ def run_sim_images(text, data, repo_root, timeout_cycles=200000, sim_args=()):
 
 def run_sim(elf, repo_root, timeout_cycles=200000, sim_args=()):
     with tempfile.TemporaryDirectory(prefix="rv32sim-") as work:
-        subprocess.run(["/bin/bash", "./elftohex.sh", os.path.abspath(elf), work],
+        subprocess.run(["/bin/bash", "tools/elftohex.sh", os.path.abspath(elf), work],
                        cwd=repo_root, capture_output=True)
         sim = os.path.abspath(os.path.join(repo_root, SIM))
         return _run_sim_binary(work, timeout_cycles, sim_args, sim=sim)

@@ -3,7 +3,7 @@
 Turn the harness's PC samples into a per-function profile.
 
     DOOM_PROFILE=build/doom/prof.txt make doom-watch ...
-    python3 host/profile_report.py build/doom/prof.txt build/tests/doom-d1b8rt0/doom.elf
+    python3 tools/profile_report.py build/doom/prof.txt build/sw/doom-d1b8rt0/doom.elf
 
 The harness samples the fetch PC every 64 cycles and counts where it lands.
 This maps those addresses onto the ELF's symbol table and aggregates, which

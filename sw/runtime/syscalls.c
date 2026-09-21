@@ -157,7 +157,7 @@ int _isatty(int fd) { return fd <= 2; }
 /* ------------------------------------------------------------------ */
 /* Heap. Grows up from _end through SDRAM. There is no upper bound     */
 /* check against the stack because the stack is in a different memory  */
-/* entirely -- see tests/sdram/boot.s.                                 */
+/* entirely -- see sw/runtime/boot.s.                                  */
 /* ------------------------------------------------------------------ */
 void *_sbrk(ptrdiff_t incr)
 {

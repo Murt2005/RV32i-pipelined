@@ -79,7 +79,7 @@ always @(negedge clk) if (halt == 1'b1) $finish;
 
 `ifdef RVFI
 // Dump the commit record so it can be cross-checked against the reference
-// model in host/rv32_model.py. Hierarchical rather than ported through top.sv,
+// model in tools/rv32_model.py. Hierarchical rather than ported through top.sv,
 // to keep the RVFI instrumentation out of the synthesised path entirely.
 always @(negedge clk) begin
     if (!reset && the_top.the_core.rvfi_valid)

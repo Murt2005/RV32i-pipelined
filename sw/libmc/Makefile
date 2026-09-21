@@ -1,5 +1,5 @@
 #
-include ../site-config.sh
+include ../../site-config.sh
 
 CC=$(RISCV_PREFIX)-gcc
 AS=$(RISCV_PREFIX)-as

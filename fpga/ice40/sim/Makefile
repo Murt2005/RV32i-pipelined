@@ -29,8 +29,8 @@ $(SIM): tb_rv32_top.sv ../rv32_top.sv ../uart.sv ../memory_spram.sv \
 
 # Build the test image in the repo root, then run it here against the board top.
 run: $(SIM)
-	$(MAKE) -C $(ROOT) build/tests/$(TEST).elf
-	/bin/bash $(ROOT)/elftohex.sh $(ROOT)/build/tests/$(TEST).elf $(HEX)
+	$(MAKE) -C $(ROOT) build/tests/$(TEST).elf build/tools/dumphex
+	/bin/bash $(ROOT)/tools/elftohex.sh $(ROOT)/build/tests/$(TEST).elf $(HEX)
 	cd $(HEX) && $(CURDIR)/$(SIM)
 
 run-all: $(SIM)

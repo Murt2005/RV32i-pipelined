@@ -7,7 +7,7 @@
 // zero rounding that disagrees with a plain restoring algorithm, and the wide
 // divisors that overflow a 32-bit shift.
 //
-//   iverilog -g2012 -I.. -o tb_divider tests/tb_divider.sv && ./tb_divider
+//   make divider-tb
 
 `timescale 1ns / 1ps
 `include "divider.sv"

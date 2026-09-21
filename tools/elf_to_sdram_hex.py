@@ -7,7 +7,7 @@ dumphex and assuming the old two-region map. A program linked to run from SDRAM
 has a boot stub at 0x00010000 and everything else at 0x80000000, which needs
 three images rather than two and needs each one based at its own region.
 
-    python3 host/elf_to_sdram_hex.py build/tests/sdram/hello.elf .
+    python3 tools/elf_to_sdram_hex.py build/sw/examples/hello.elf .
 
 writes code0..3.hex (the boot stub), data0..3.hex (empty, but the simulator
 reads them anyway) and sdram0..3.hex.

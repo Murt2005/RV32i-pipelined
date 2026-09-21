@@ -14,10 +14,10 @@ core's mcycle CSR, because that works for every test including the ones that
 never read a counter, and it costs nothing to collect.
 
     # record a baseline
-    make run-tests-iverilog | python3 host/cycle_report.py --save build/cycles-base.json
+    make run-tests-iverilog | python3 tools/cycle_report.py --save build/cycles-base.json
 
     # after a change, compare
-    make run-tests-iverilog | python3 host/cycle_report.py --compare build/cycles-base.json
+    make run-tests-iverilog | python3 tools/cycle_report.py --compare build/cycles-base.json
 """
 
 import argparse

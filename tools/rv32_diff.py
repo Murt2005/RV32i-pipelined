@@ -28,11 +28,11 @@ in a pipelined core live in *interactions* -- a particular bypass source
 landing on a particular stall cycle next to a particular branch. Random
 sequences hit those combinations without anyone having to imagine them.
 
-    python3 host/rv32_diff.py                       # 50 programs, on hardware
-    python3 host/rv32_diff.py --sim --iters 100     # no hardware needed
-    python3 host/rv32_diff.py --sim --mem-latency 8 --stall-rate 128
-    python3 host/rv32_diff.py --iters 500 --seed 7
-    python3 host/rv32_diff.py --length 400          # longer programs
+    python3 tools/rv32_diff.py                       # 50 programs, on hardware
+    python3 tools/rv32_diff.py --sim --iters 100     # no hardware needed
+    python3 tools/rv32_diff.py --sim --mem-latency 8 --stall-rate 128
+    python3 tools/rv32_diff.py --iters 500 --seed 7
+    python3 tools/rv32_diff.py --length 400          # longer programs
 """
 
 import argparse

@@ -4,7 +4,6 @@ build/
 *.a
 *.hex
 *.vcd
-dumphex
 
 # FPGA
 fpga/ice40/build/
@@ -28,4 +27,4 @@ build/formal/
 
 # Editor
 .vscode/
-tests/doom/doom1.wad
+sw/doom/doom1.wad

@@ -12,7 +12,7 @@ resampled or re-quantised. What you watch is what the hardware drew, pixel for
 pixel. It also means no encoder to install -- GIF's compression is LZW, which is
 about sixty lines, where every video codec worth using is a dependency.
 
-    python3 host/frames_to_gif.py build/doom/doom.gif build/doom/frame*.ppm
+    python3 tools/frames_to_gif.py build/doom/doom.gif build/doom/frame*.ppm
 
 Options:
     --delay N    hundredths of a second per frame (default 3, about 33 fps)
