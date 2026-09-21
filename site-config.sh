@@ -24,7 +24,7 @@ RISCV_LIB=/opt/homebrew/Cellar/riscv-gnu-toolchain/main/lib/gcc/riscv64-unknown-
 VERILATOR=/usr/local/bin/verilator
 IVERILOG=/opt/homebrew/bin/iverilog
 
-# The target ISA, in one place because both Makefile and libmc/Makefile build
+# The target ISA, in one place because both Makefile and sw/libmc/Makefile build
 # objects that get linked together -- they have to agree, and RISCV_LIB above
 # has to point at the matching multilib.
 #

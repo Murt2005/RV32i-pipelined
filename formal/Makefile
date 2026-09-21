@@ -10,6 +10,7 @@
 # out of symlinks into the vendored riscv-formal rather than a copy of it.
 
 ROOT     := ..
+RTL      := $(ROOT)/rtl
 BASEDIR  := rf
 CORE     := rv32
 CHECKDIR := $(BASEDIR)/cores/$(CORE)
@@ -20,16 +21,16 @@ CHECKDIR := $(BASEDIR)/cores/$(CORE)
 SV2V_DEFS := -DRVFI -DRISCV_FORMAL -DRISCV_FORMAL_NRET=1 \
              -DRISCV_FORMAL_XLEN=32 -DRISCV_FORMAL_ILEN=32 \
              -DRISCV_FORMAL_ALIGNED_MEM -DSYNTHESIS
-SV2V_INC  := -I$(ROOT) -I. -Iriscv-formal/checks
+SV2V_INC  := -I$(RTL)/core -I$(RTL)/mem -I. -Iriscv-formal/checks
 
 .PHONY: checks run run-insn list clean one
 
 # yosys cannot read the core's SystemVerilog, so flatten wrapper + core first
 # and point riscv-formal at the result.
-$(ROOT)/build/formal/rvfi_top.v: wrapper.sv $(ROOT)/cpu.sv $(ROOT)/riscv32_common.sv \
-                                 $(ROOT)/memory_io.sv $(ROOT)/base.sv $(ROOT)/system.sv
+$(ROOT)/build/formal/rvfi_top.v: wrapper.sv $(wildcard $(RTL)/core/*.sv) \
+                                 $(RTL)/mem/memory_io.sv
 	mkdir -p $(ROOT)/build/formal
-	sv2v $(SV2V_DEFS) $(SV2V_INC) --write=$@ wrapper.sv $(ROOT)/cpu.sv
+	sv2v $(SV2V_DEFS) $(SV2V_INC) --write=$@ wrapper.sv $(RTL)/core/cpu.sv
 
 riscv-formal/insns/isa_rv32i.txt:
 	cd riscv-formal/insns && python3 generate.py

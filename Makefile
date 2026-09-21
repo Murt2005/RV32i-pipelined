@@ -1,33 +1,32 @@
 #
 
 include site-config.sh
-goal: result-iverilog
+
+# Without this the first rule in the file, sw/libmc/libmc.a, would be the default.
+.DEFAULT_GOAL := run-tests-iverilog
+
 CC=$(RISCV_PREFIX)-gcc
 AS=$(RISCV_PREFIX)-as
 LD=$(RISCV_PREFIX)-ld
 
-# MARCH/MABI come from site-config.sh, so this file and libmc/Makefile cannot
+# MARCH/MABI come from site-config.sh, so this file and sw/libmc/Makefile cannot
 # drift apart. -mabi is now explicit everywhere: it is the default for rv32i so
 # omitting it happened to work, but RISCV_LIB points at one specific multilib
 # directory and the two have to agree.
-# GCC 15 defaults to C23, where bool/true/false are keywords -- and libmc/base.h
+# GCC 15 defaults to C23, where bool/true/false are keywords -- and sw/libmc/base.h
 # has `typedef unsigned int bool`, which C23 rejects outright. Pinning the
 # standard keeps this legacy C compiling with exactly the semantics it was
 # written against, including a 4-byte bool, rather than quietly changing type
-# sizes underneath it. libmc/Makefile already pins gnu99 for the same reason.
+# sizes underneath it. sw/libmc/Makefile already pins gnu99 for the same reason.
 # Nothing caught this until a C program was built, because every test in the
 # regression suite is hand-written assembly.
 CSTD=-std=gnu17
 
 SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
-CCFLAGS=-march=$(MARCH) -mabi=$(MABI) $(CSTD) -Wno-builtin-declaration-mismatch -Ilibmc
-LDFLAGS=-m $(LDEMUL) --script ld.script
-LDPOSTFLAGS= -Llibmc -lmc  -Llibmc -lmc -L$(RISCV_LIB) -lgcc
-TOOLS=dumphex
-LIBS=libmc/libmc.a
-
-TEST_S=start.s
-TEST_C=test.c
+LDFLAGS=-m $(LDEMUL) --script tests/common/link.ld
+LDPOSTFLAGS= -Lsw/libmc -lmc -L$(RISCV_LIB) -lgcc
+TOOLS=build/tools/dumphex
+LIBS=sw/libmc/libmc.a
 
 # --------------------------------------------------------------------
 # Per-file RV32I assembly tests (each builds to its own ELF/hex images)
@@ -38,6 +37,12 @@ TESTS_STEMS := $(patsubst tests/%.s,%,$(TESTS_S))
 TESTS_RUN_NAMES := $(subst /,-,$(TESTS_STEMS))
 
 SIM_IVERILOG := build/sim/result-iverilog
+
+# memory.sv reads code0.hex..data3.hex (and sdram0..3.hex) from the simulator's
+# working directory. Each program's images go in their own directory here and
+# the simulator runs from it, so nothing is written to the repo root and runs
+# never pick up each other's images.
+HEX := build/hex
 
 # Pipeline stall rate out of 256 for simulation runs; 0 disables.
 #   make run-tests-iverilog STALL_RATE=128
@@ -51,7 +56,7 @@ STALL_RATE ?= 0
 # overlap.
 MEM_LATENCY ?= 0
 
-# Simulator watchdog in cycles. Matches itop.sv's own default, but has to be
+# Simulator watchdog in cycles. Matches sim/itop.sv's own default, but has to be
 # raised when the memory is slowed down: at MEM_LATENCY=16 a directed test takes
 # ~85x the cycles it does at 0, so the default turns a passing run into a
 # timeout that looks like a hang.
@@ -59,19 +64,13 @@ SIM_TIMEOUT ?= 120000
 
 SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_TIMEOUT)
 
-.PHONY: run-tests-iverilog run-one-iverilog run-legacy-iverilog
-
-.c.o:
-	$(CC) $(CCFLAGS) -c $*.c
-
-.s.o:
-	$(AS) $(SSFLAGS) -c $*.s -o $*.o
+.PHONY: run-tests-iverilog run-one-iverilog
 
 build/%.o: %.s tests/common/test_macros.s tests/common/test_runtime.s
 	mkdir -p $(dir $@)
 	$(AS) $(SSFLAGS) -c $< -o $@
 
-build/%.elf: build/%.o
+build/%.elf: build/%.o tests/common/link.ld
 	mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $<
 
@@ -81,38 +80,37 @@ build/%.elf: build/%.o
 # Switching MARCH therefore left a stale rv32i archive to be linked against
 # rv32im objects, which silently reintroduced libgcc's soft multiply and divide
 # into a build that has hardware for both.
-LIBMC_SRC := $(wildcard libmc/*.c) $(wildcard libmc/*.s) $(wildcard libmc/*.h) \
-             libmc/Makefile site-config.sh
+LIBMC_SRC := $(wildcard sw/libmc/*.c) $(wildcard sw/libmc/*.s) $(wildcard sw/libmc/*.h) \
+             sw/libmc/Makefile site-config.sh
 
-libmc/libmc.a: $(LIBMC_SRC)
-	$(MAKE) -C libmc clean
-	$(MAKE) -C libmc
+sw/libmc/libmc.a: $(LIBMC_SRC)
+	$(MAKE) -C sw/libmc clean
+	$(MAKE) -C sw/libmc
 
-dumphex: dumphex.c
-	gcc -o dumphex dumphex.c
-
-test: $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LIBS) $(TOOLS)
-	$(LD) $(LDFLAGS) -o test $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LDPOSTFLAGS)
-	/bin/bash ./elftohex.sh test .
+build/tools/dumphex: tools/dumphex.c
+	mkdir -p $(dir $@)
+	gcc -o $@ $<
 
 # Every RTL file the simulator pulls in, in one list. It was previously spelled
 # out per target and had already fallen behind -- a missing entry means make
 # reports "up to date" and silently runs the old binary, which looks exactly like
-# the edit having no effect.
-RTL_CORE := top.sv cpu.sv memory.sv memory_delay.sv memory_io.sv \
-            riscv.sv riscv32_common.sv base.sv system.sv divider.sv \
-            bus/memory_map.sv bus/decoder.sv bus/mmio.sv bus/arbiter.sv bus/icache.sv bus/dcache.sv
-RTL_SRC  := itop.sv $(RTL_CORE)
+# the edit having no effect. A wildcard cannot fall behind.
+#
+# Every `include names a bare file, so the include path is what resolves them.
+RTL_DIRS := rtl rtl/core rtl/mem rtl/bus
+RTL_INC  := $(addprefix -I,$(RTL_DIRS))
+RTL_CORE := $(foreach d,$(RTL_DIRS),$(wildcard $(d)/*.sv))
+RTL_SRC  := sim/itop.sv $(RTL_CORE)
 
 $(SIM_IVERILOG): $(RTL_SRC)
 	mkdir -p $(dir $@)
-	$(IVERILOG) -g2012 -o $@ itop.sv
+	$(IVERILOG) -g2012 $(RTL_INC) -o $@ sim/itop.sv
 
 # Same design with the RVFI commit port enabled. Separate binary so the normal
 # simulator, and the synthesised build, carry none of the instrumentation.
 build/sim/result-rvfi: $(RTL_SRC)
 	mkdir -p $(dir $@)
-	$(IVERILOG) -g2012 -DRVFI -o $@ itop.sv
+	$(IVERILOG) -g2012 $(RTL_INC) -DRVFI -o $@ sim/itop.sv
 
 # RVFI_LATENCY sweeps the commit record against a slow memory as well as a fast
 # one. The record has to be right in both cases and, until this existed, only the
@@ -121,23 +119,19 @@ RVFI_LATENCY ?= 0
 
 .PHONY: rvfi-check rvfi-check-slow
 rvfi-check: build/sim/result-rvfi $(TOOLS) riscv-tests
-	python3 host/rvfi_check.py --all --mem-latency $(RVFI_LATENCY)
+	python3 tools/rvfi_check.py --all --mem-latency $(RVFI_LATENCY)
 
 rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests
 	@rc=0; for d in 1 4 8; do \
 		printf 'rvfi mem-latency %-3s ' $$d; \
-		python3 host/rvfi_check.py --all --mem-latency $$d > build/rvfi-$$d.log 2>&1 \
+		python3 tools/rvfi_check.py --all --mem-latency $$d > build/rvfi-$$d.log 2>&1 \
 			&& echo ok || { echo "FAILED -- build/rvfi-$$d.log"; rc=1; }; \
 	done; exit $$rc
 
-run-legacy-iverilog: result-iverilog
-
 # Run one test by stem under tests/ (e.g. TEST_STEM=isa/add_sub)
 run-one-iverilog: $(TOOLS) $(SIM_IVERILOG)
-	/bin/bash ./elftohex.sh build/tests/$(TEST_STEM).elf .
-	mkdir -p build/hex/$(TEST_STEM)
-	cp code0.hex code1.hex code2.hex code3.hex data0.hex data1.hex data2.hex data3.hex build/hex/$(TEST_STEM)/
-	./$(SIM_IVERILOG) $(SIM_ARGS)
+	/bin/bash tools/elftohex.sh build/tests/$(TEST_STEM).elf $(HEX)/$(TEST_STEM)
+	cd $(HEX)/$(TEST_STEM) && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS)
 
 # Friendly per-test targets, e.g. run-test-isa-add_sub-iverilog
 run-test-%-iverilog: $(TOOLS) $(SIM_IVERILOG)
@@ -188,7 +182,7 @@ cycle-baseline cycle-check:
 		echo "===== $$name ====="; \
 		$(MAKE) --no-print-directory $$target > $(CYCLE_LOG)/$$name.log 2>&1 \
 			|| { echo "  suite FAILED -- see $(CYCLE_LOG)/$$name.log"; rc=1; continue; }; \
-		python3 host/cycle_report.py $(MODE) $(CYCLE_DIR)/$$name.json \
+		python3 tools/cycle_report.py $(MODE) $(CYCLE_DIR)/$$name.json \
 			$(CYCLE_LOG)/$$name.log || rc=1; \
 	done; \
 	exit $$rc
@@ -225,26 +219,9 @@ latency-sweep: $(TOOLS) $(SIM_IVERILOG)
 	run "MEM_LATENCY=8 STALL_RATE=128" 8 128 4000000 "latency-8-stall.log"; \
 	exit $$rc
 
-# -Wno-fatal for the same reason the coverage build has it: Verilator reports
-# circular combinational logic through the control block's advance signals, which
-# is a false positive at struct granularity -- it merges every field of
-# stage_control_signal_t into one node. The loop predates all of this and the
-# declarations in `core` already carry a lint_off for it. Without the flag this
-# target simply fails to build, which is how it had been sitting.
-result-verilator: $(RTL_CORE) verilator_top.cpp test
-	 $(VERILATOR) -O0 --cc --build --top-module top -Wno-fatal top.sv verilator_top.cpp --exe
-	 cp obj_dir/Vtop ./result-verilator
-	 rm -rf obj_dir
-	 ./result-verilator
-
-result-iverilog: itop.sv top.sv cpu.sv test
-	 $(IVERILOG) -g2012 -o result-iverilog itop.sv
-	 ./result-iverilog
-	 rm result-iverilog
-
 clean:
-	rm -rf dumphex test.vcd obj_dir/ *.o result-verilator result-iverilog *.hex test.bin test build
-	$(MAKE) -C libmc clean
+	rm -rf build
+	$(MAKE) -C sw/libmc clean
 
 
 # --------------------------------------------------------------------
@@ -280,8 +257,9 @@ riscv-tests: $(RVTESTS_ELF)
 run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
-		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
-		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		d=$(HEX)/riscv-tests/$$t; \
+		/bin/bash tools/elftohex.sh build/riscv-tests/$$t.elf $$d >/dev/null 2>&1; \
+		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "PASS" ]; then \
@@ -313,8 +291,9 @@ riscv-tests-p: $(RVTESTS_P_ELF)
 run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 	@pass=0; fail=0; \
 	for t in $(RVTESTS); do \
-		/bin/bash ./elftohex.sh build/riscv-tests-p/$$t.elf . >/dev/null 2>&1; \
-		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		d=$(HEX)/riscv-tests-p/$$t; \
+		/bin/bash tools/elftohex.sh build/riscv-tests-p/$$t.elf $$d >/dev/null 2>&1; \
+		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		out=`echo "$$raw" | grep -oE 'TOHOST=[0-9]+' | head -1`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "TOHOST=1" ]; then \
@@ -334,11 +313,15 @@ run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
 # leave only a reset stub at 0x00010000. That is also what Doom will need.
 #
 # newlib rather than libmc: libmc has no malloc, no file I/O and no memcpy, and
-# its printf drops the `l` in %ld. libmc is untouched and the assembly suite
-# still uses it.
+# its printf drops the `l` in %ld. libmc is untouched and Dhrystone still uses it.
+#
+# sw/runtime is the reset stub, syscalls and linker script every such program
+# shares; sw/examples holds the small programs that exercise it.
 # --------------------------------------------------------------------
-SDRAM_DIR  := tests/sdram
-SDRAM_OUT  := build/tests/sdram
+RUNTIME_DIR  := sw/runtime
+RUNTIME_OUT  := build/sw/runtime
+EXAMPLES_DIR := sw/examples
+EXAMPLES_OUT := build/sw/examples
 
 # -mstrict-align is not optional on this core. RISC-V leaves misaligned access
 # implementation-defined and GCC assumes it works, so it will happily emit an
@@ -347,7 +330,7 @@ SDRAM_OUT  := build/tests/sdram
 # illegal instructions -- a long way from the store that caused it.
 SDRAM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Wall -mstrict-align \
                 -ffunction-sections -fdata-sections
-SDRAM_LDFLAGS := -m $(LDEMUL) -T $(SDRAM_DIR)/link.ld --gc-sections
+SDRAM_LDFLAGS := -m $(LDEMUL) -T $(RUNTIME_DIR)/link.ld --gc-sections
 
 # newlib and libgcc for this multilib. Order matters: libc needs libgcc, and the
 # syscalls object has to come before libc so the linker resolves _write and the
@@ -357,27 +340,32 @@ SDRAM_LIBS := -L$(NEWLIB_DIR) -lc -lm -L$(RISCV_LIB) -lgcc
 
 .PHONY: sdram-progs run-sdram-hello
 
-$(SDRAM_OUT)/%.o: $(SDRAM_DIR)/%.c
+RUNTIME_OBJS := $(RUNTIME_OUT)/boot.o $(RUNTIME_OUT)/syscalls.o
+
+$(RUNTIME_OUT)/%.o: $(RUNTIME_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(SDRAM_CFLAGS) -c $< -o $@
 
-$(SDRAM_OUT)/%.o: $(SDRAM_DIR)/%.s
+$(RUNTIME_OUT)/%.o: $(RUNTIME_DIR)/%.s
 	@mkdir -p $(dir $@)
 	$(AS) -march=$(MARCH) -mabi=$(MABI) -c $< -o $@
 
-$(SDRAM_OUT)/hello.elf: $(SDRAM_OUT)/boot.o $(SDRAM_OUT)/syscalls.o \
-                        $(SDRAM_OUT)/hello.o $(SDRAM_DIR)/link.ld
+$(EXAMPLES_OUT)/%.o: $(EXAMPLES_DIR)/%.c
 	@mkdir -p $(dir $@)
-	$(LD) $(SDRAM_LDFLAGS) -o $@ $(SDRAM_OUT)/boot.o $(SDRAM_OUT)/syscalls.o \
-		$(SDRAM_OUT)/hello.o $(SDRAM_LIBS)
+	$(CC) $(SDRAM_CFLAGS) -c $< -o $@
 
-sdram-progs: $(SDRAM_OUT)/hello.elf
+$(EXAMPLES_OUT)/hello.elf: $(RUNTIME_OBJS) $(EXAMPLES_OUT)/hello.o $(RUNTIME_DIR)/link.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(SDRAM_LDFLAGS) -o $@ $(RUNTIME_OBJS) $(EXAMPLES_OUT)/hello.o $(SDRAM_LIBS)
+
+sdram-progs: $(EXAMPLES_OUT)/hello.elf
 
 # The SDRAM image needs three regions rather than two, so it does not go through
-# elftohex.sh.
-run-sdram-hello: $(SDRAM_OUT)/hello.elf $(SIM_IVERILOG)
-	python3 host/elf_to_sdram_hex.py $(SDRAM_OUT)/hello.elf .
-	./$(SIM_IVERILOG) $(SIM_ARGS)
+# elftohex.sh. hello needs about 1.5M cycles, well past the default watchdog.
+run-sdram-hello: $(EXAMPLES_OUT)/hello.elf $(SIM_IVERILOG)
+	@mkdir -p $(HEX)/examples/hello
+	python3 tools/elf_to_sdram_hex.py $(EXAMPLES_OUT)/hello.elf $(HEX)/examples/hello
+	cd $(HEX)/examples/hello && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS)
 
 # --------------------------------------------------------------------
 # Doom.
@@ -391,7 +379,7 @@ run-sdram-hello: $(SDRAM_OUT)/hello.elf $(SIM_IVERILOG)
 # Linked like any other SDRAM program: reset stub on chip, everything else in
 # SDRAM, newlib underneath.
 # --------------------------------------------------------------------
-DOOM_DIR := tests/doom
+DOOM_DIR := sw/doom
 DOOM_SRC := $(DOOM_DIR)/src
 # The renderer flags are part of the output path, so each configuration gets its
 # own objects, binary and snapshot.
@@ -407,8 +395,8 @@ DOOM_SRC := $(DOOM_DIR)/src
 # cannot disturb another.
 #
 # The cost is disk: a full set per configuration, and a 64 MB snapshot each.
-# `rm -rf build/tests/doom-* build/doom/title-*.snap*` clears them.
-# Renderer cost, set at build time -- see tests/doom/doomgeneric_rv32.c.
+# `rm -rf build/sw/doom-* build/doom/title-*.snap*` clears them.
+# Renderer cost, set at build time -- see sw/doom/doomgeneric_rv32.c.
 #   DOOM_DETAIL=1    low detail; half the columns drawn
 #   DOOM_BLOCKS=N    3D view size 3..11, 10 is the default full-width view
 #   DOOM_REALTIME=1  pace the game from mcycle instead of per drawn frame
@@ -418,7 +406,7 @@ DOOM_REALTIME ?= 0
 DOOM_DETAIL ?= 0
 DOOM_BLOCKS ?= 10
 DOOM_CFG := d$(DOOM_DETAIL)b$(DOOM_BLOCKS)rt$(DOOM_REALTIME)
-DOOM_OUT := build/tests/doom-$(DOOM_CFG)
+DOOM_OUT := build/sw/doom-$(DOOM_CFG)
 
 # The upstream object list, minus the platform backends (we supply our own) and
 # minus i_main.c, whose main() we replace.
@@ -435,14 +423,10 @@ DOOM_NAMES := dummy am_map doomdef doomstat dstrings d_event d_items d_iwad \
 
 DOOM_OBJS := $(addprefix $(DOOM_OUT)/,$(addsuffix .o,$(DOOM_NAMES))) \
              $(DOOM_OUT)/doomgeneric_rv32.o \
-             $(SDRAM_OUT)/boot.o $(SDRAM_OUT)/syscalls.o
+             $(RUNTIME_OBJS)
 
 # CMAP256 selects the 8bpp path. NORMALUNIX and LINUX are what doomgeneric's own
 # ports define; they gate the POSIX-ish bits it expects to exist.
-# Renderer cost, set at build time -- see tests/doom/doomgeneric_rv32.c.
-#   DOOM_DETAIL=1   low detail; half the columns drawn
-#   DOOM_BLOCKS=N   3D view size 3..11, 10 is the default full-width view
-
 DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -mstrict-align \
                -DDOOM_DETAIL=$(DOOM_DETAIL) -DDOOM_BLOCKS=$(DOOM_BLOCKS) -DDOOM_REALTIME=$(DOOM_REALTIME) \
                -DCMAP256 -DNORMALUNIX -DLINUX \
@@ -454,16 +438,11 @@ DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -mstrict-align \
 
 .PHONY: doom doom-sim
 
-# A stamp recording the flags the objects were built with, so that changing a
-# flag rebuilds them.
-#
-# Objects otherwise depend on their source and nothing else, which makes
-# `make DOOM_DETAIL=1 doom` a silent no-op after a default build: make sees an
-# up-to-date .o and the flag does nothing at all. Not hypothetical -- it
-# invalidated a four-way benchmark here, in which every configuration measured
-# the same binary and returned identical cycle counts to the digit. Same shape
-# as the stale libmc.a that survived the ISA switch.
-#
+# Objects depend on their source and nothing else. That is only safe because
+# DOOM_OUT has the flags in its path: without it, `make DOOM_DETAIL=1 doom` after
+# a default build is a silent no-op. Not hypothetical -- it invalidated a
+# four-way benchmark here, in which every configuration measured the same binary
+# and returned identical cycle counts to the digit.
 $(DOOM_OUT)/%.o: $(DOOM_SRC)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(DOOM_CFLAGS) -c $< -o $@
@@ -472,7 +451,7 @@ $(DOOM_OUT)/doomgeneric_rv32.o: $(DOOM_DIR)/doomgeneric_rv32.c
 	@mkdir -p $(dir $@)
 	$(CC) $(DOOM_CFLAGS) -c $< -o $@
 
-$(DOOM_OUT)/doom.elf: $(DOOM_OBJS) $(SDRAM_DIR)/link.ld
+$(DOOM_OUT)/doom.elf: $(DOOM_OBJS) $(RUNTIME_DIR)/link.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(SDRAM_LDFLAGS) -o $@ $(DOOM_OBJS) $(SDRAM_LIBS)
 	@$(RISCV_PREFIX)-size $@
@@ -503,7 +482,7 @@ doom: $(DOOM_OUT)/doom.sdram.bin $(DOOM_OUT)/doom.boot.bin
 # runs for billions of cycles. It is a plain `=`, so overriding it means passing
 # it on the sub-make command line, which in turn means not using --build.
 #
-# SYNTHESIS. Compiles out the `ifndef SYNTHESIS` checkers in cpu.sv, the caches
+# SYNTHESIS. Compiles out the `ifndef SYNTHESIS` checkers in rtl/core/cpu.sv, the caches
 # and the arbiter. Those are worth their cost in the suites that exist to catch
 # things and they still run there -- run-tests-iverilog, the verilator test top,
 # rvfi-check and formal all keep them. Paying for them again here buys nothing,
@@ -527,12 +506,12 @@ endif
 DOOM_NATIVE := $(shell uname -m | grep -q arm && echo -mcpu=native || echo -march=native)
 DOOM_JOBS   := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
-build/doom/Vtop: $(RTL_CORE) $(DOOM_DIR)/doom_sim.cpp
+build/doom/Vtop: $(RTL_CORE) sim/doom_sim.cpp
 	@mkdir -p build/doom
 	$(VERILATOR) -O3 --cc --top-module top -Wno-fatal \
 		-Gsdram_bytes=67108864 --savable \
 		--x-assign fast --x-initial fast $(DOOM_VDEFS) \
-		--Mdir build/doom top.sv $(DOOM_DIR)/doom_sim.cpp --exe -o Vtop
+		--Mdir build/doom $(RTL_INC) rtl/top.sv sim/doom_sim.cpp --exe -o Vtop
 	$(MAKE) -C build/doom -f Vtop.mk -j$(DOOM_JOBS) \
 		OPT_FAST="-O3 $(DOOM_NATIVE)" OPT_GLOBAL="-O2"
 
@@ -540,7 +519,7 @@ build/doom/Vtop: $(RTL_CORE) $(DOOM_DIR)/doom_sim.cpp
 # Nothing on macOS opens PPM, so this converts them.
 .PHONY: doom-png doom-gif
 doom-png:
-	@python3 host/ppm_to_png.py build/doom/*.ppm
+	@python3 tools/ppm_to_png.py build/doom/*.ppm
 
 # A couple of hundred stills is a film, not a flipbook. GIF because Doom's
 # output is already 8-bit paletted, so the frames go in without being requantised
@@ -551,7 +530,7 @@ DOOM_GIF       ?= build/doom/doom.gif
 DOOM_GIF_DELAY ?= 3
 DOOM_GIF_SCALE ?= 2
 doom-gif:
-	@python3 host/frames_to_gif.py $(DOOM_GIF) build/doom/frame*.ppm \
+	@python3 tools/frames_to_gif.py $(DOOM_GIF) build/doom/frame*.ppm \
 		--delay=$(DOOM_GIF_DELAY) --scale=$(DOOM_GIF_SCALE)
 
 # DOOM_KEYS points the harness at a scripted input sequence; unset means Doom
@@ -627,7 +606,7 @@ doom-snapshot: $(DOOM_SNAP)
 # picture is fitted to the window and a small window gets a small picture.
 #
 # stdout goes to a log rather than the screen, and that is required rather than
-# tidy: top.sv writes the putchar MMIO with $write, so Doom's own text comes out
+# tidy: rtl/top.sv writes the putchar MMIO with $write, so Doom's own text comes out
 # of the RTL on stdout and would be printed straight through the image. The
 # renderer draws to /dev/tty instead, which is the terminal regardless of where
 # stdout has been pointed.
@@ -664,20 +643,12 @@ doom-watch: $(DOOM_SNAP) | build/doom/Vtop
 
 # --------------------------------------------------------------------
 # Official riscv-tests rv32um suite (M extension).
-#
-# Built with its own -march rather than the global one, so the M tests can be
-# brought up while every other program in the tree is still plain rv32i. Once the
-# extension is finished MARCH in site-config.sh moves to rv32im_zicsr and this
-# override becomes redundant -- but the two must stay separable until then, or a
-# half-finished multiplier breaks every existing test at once.
 # --------------------------------------------------------------------
 RVTESTS_M_DIR := tests/riscv-tests/isa/rv32um
 RVTESTS_M     := $(basename $(notdir $(wildcard $(RVTESTS_M_DIR)/*.S)))
 RVTESTS_M_ELF := $(addprefix build/riscv-tests-m/,$(addsuffix .elf,$(RVTESTS_M)))
 
-MARCH_M := rv32im_zicsr
-
-RVTEST_M_FLAGS := -march=$(MARCH_M) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
+RVTEST_M_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
                   -Itests/riscv-tests-env -Itests/riscv-tests/isa/macros/scalar \
                   -T tests/riscv-tests-env/link.ld
 
@@ -692,8 +663,9 @@ riscv-tests-m: $(RVTESTS_M_ELF)
 run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
 	@pass=0; fail=0; \
 	for t in $(RVTESTS_M); do \
-		/bin/bash ./elftohex.sh build/riscv-tests-m/$$t.elf . >/dev/null 2>&1; \
-		raw=`./$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		d=$(HEX)/riscv-tests-m/$$t; \
+		/bin/bash tools/elftohex.sh build/riscv-tests-m/$$t.elf $$d >/dev/null 2>&1; \
+		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$out" = "PASS" ]; then \
@@ -708,24 +680,24 @@ run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
 # --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from
 # tests/riscv-tests/benchmarks/dhrystone (a number is only comparable if the
-# benchmark is); tests/bench/dhrystone/port.c supplies what this bare-metal
+# benchmark is); sw/bench/dhrystone/port.c supplies what this bare-metal
 # machine does not already have, and rv_env.h replaces the riscv-tests util.h.
 #
 # Timing comes from the mcycle CSR, which dhrystone.h already selects for
 # __riscv. -O2 with the source's own no-inline pragma is the conventional
 # Dhrystone build.
 # --------------------------------------------------------------------
-DHRY_DIR  := tests/bench/dhrystone
-DHRY_OUT  := build/tests/bench/dhrystone
-DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Ilibmc -I$(DHRY_DIR) \
+DHRY_DIR  := sw/bench/dhrystone
+DHRY_OUT  := build/sw/bench/dhrystone
+DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Isw/libmc -I$(DHRY_DIR) \
               -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
               -Wno-implicit-int -Wno-return-type
-DHRY_OBJS := $(DHRY_OUT)/start.o $(DHRY_OUT)/dhrystone.o \
+DHRY_OBJS := $(DHRY_OUT)/crt0.o $(DHRY_OUT)/dhrystone.o \
              $(DHRY_OUT)/dhrystone_main.o $(DHRY_OUT)/port.o
 
 .PHONY: dhrystone
 
-$(DHRY_OUT)/start.o: start.s
+$(DHRY_OUT)/crt0.o: $(DHRY_DIR)/crt0.s
 	mkdir -p $(dir $@)
 	$(AS) $(SSFLAGS) -c $< -o $@
 
@@ -733,20 +705,33 @@ $(DHRY_OUT)/%.o: $(DHRY_DIR)/%.c $(DHRY_DIR)/dhrystone.h $(DHRY_DIR)/rv_env.h
 	mkdir -p $(dir $@)
 	$(CC) $(DHRY_FLAGS) -c $< -o $@
 
-$(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) tests/bench/link.ld
-	$(LD) -m $(LDEMUL) --script tests/bench/link.ld -o $@ $(DHRY_OBJS) $(LDPOSTFLAGS)
+$(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) sw/bench/link.ld
+	$(LD) -m $(LDEMUL) --script sw/bench/link.ld -o $@ $(DHRY_OBJS) $(LDPOSTFLAGS)
 
 dhrystone: $(DHRY_OUT)/dhrystone.elf
+
+# --------------------------------------------------------------------
+# The divider's arithmetic on its own: every spec corner plus random pairs. The
+# pipeline handshake is tests/hazards/divide_handshake.s.
+# --------------------------------------------------------------------
+.PHONY: divider-tb
+
+build/sim/tb_divider: sim/tb_divider.sv rtl/core/divider.sv rtl/core/system.sv
+	mkdir -p $(dir $@)
+	$(IVERILOG) -g2012 -Irtl/core -o $@ sim/tb_divider.sv
+
+divider-tb: build/sim/tb_divider
+	./build/sim/tb_divider
 
 # --------------------------------------------------------------------
 # Line/toggle coverage over both suites, via Verilator.
 # --------------------------------------------------------------------
 .PHONY: coverage
 
-build/cov/Vtop: $(RTL_CORE) verilator_top.cpp
+build/cov/Vtop: $(RTL_CORE) sim/verilator_top.cpp
 	mkdir -p build/cov
 	$(VERILATOR) -O0 --cc --build --top-module top --coverage \
-		--Mdir build/cov -Wno-fatal top.sv verilator_top.cpp --exe \
+		--Mdir build/cov -Wno-fatal $(RTL_INC) rtl/top.sv sim/verilator_top.cpp --exe \
 		-o Vtop
 
 coverage: build/cov/Vtop $(TOOLS) riscv-tests
@@ -754,20 +739,21 @@ coverage: build/cov/Vtop $(TOOLS) riscv-tests
 	@set -e; n=0; \
 	for t in $(TESTS_STEMS); do \
 		$(MAKE) -s build/tests/$$t.elf >/dev/null; \
-		/bin/bash ./elftohex.sh build/tests/$$t.elf . >/dev/null 2>&1; \
-		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`.dat \
-			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
-		RV32_STALL_RATE=128 \
-		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`-stall.dat \
-			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
-		RV32_MEM_LATENCY=4 RV32_STALL_RATE=128 RV32_MAX_CYCLES=20000000 \
-		RV32_COVERAGE_FILE=build/cov/dat/`echo $$t | tr / -`-lat.dat \
-			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
+		d=$(HEX)/$$t; c=$(CURDIR)/build/cov/dat/`echo $$t | tr / -`; \
+		/bin/bash tools/elftohex.sh build/tests/$$t.elf $$d >/dev/null 2>&1; \
+		(cd $$d && RV32_COVERAGE_FILE=$$c.dat \
+			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
+		(cd $$d && RV32_STALL_RATE=128 RV32_COVERAGE_FILE=$$c-stall.dat \
+			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
+		(cd $$d && RV32_MEM_LATENCY=4 RV32_STALL_RATE=128 RV32_MAX_CYCLES=20000000 \
+			RV32_COVERAGE_FILE=$$c-lat.dat \
+			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 	done; \
 	for t in $(RVTESTS); do \
-		/bin/bash ./elftohex.sh build/riscv-tests/$$t.elf . >/dev/null 2>&1; \
-		RV32_COVERAGE_FILE=build/cov/dat/rv32ui-$$t.dat \
-			./build/cov/Vtop >/dev/null 2>&1; n=$$((n+1)); \
+		d=$(HEX)/riscv-tests/$$t; \
+		/bin/bash tools/elftohex.sh build/riscv-tests/$$t.elf $$d >/dev/null 2>&1; \
+		(cd $$d && RV32_COVERAGE_FILE=$(CURDIR)/build/cov/dat/rv32ui-$$t.dat \
+			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 	done; \
 	echo "ran $$n programs"
 	@verilator_coverage --write build/cov/merged.dat build/cov/dat/*.dat >/dev/null

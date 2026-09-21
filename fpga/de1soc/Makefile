@@ -36,10 +36,10 @@ $(BUILD)/ps2_tb: sim/ps2_tb.sv ps2_keyboard.sv
 	@mkdir -p $(BUILD)
 	@$(IVERILOG) -g2012 -o $@ $^
 
-# -I$(ROOT) so the shared memory_io.sv / system.sv are found.
+# The shared memory_io.sv / system.sv come from rtl/.
 $(BUILD)/sdram_tb: sim/sdram_tb.sv sim/sdram_model.sv sdram_ctrl.sv
 	@mkdir -p $(BUILD)
-	@$(IVERILOG) -g2012 -I$(ROOT) -o $@ $^
+	@$(IVERILOG) -g2012 -I$(ROOT)/rtl/core -I$(ROOT)/rtl/mem -o $@ $^
 
 clean:
 	rm -rf $(BUILD)

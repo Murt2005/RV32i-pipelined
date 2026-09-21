@@ -1,14 +1,9 @@
 # Build artifacts
 build/
-obj_dir/
 *.o
 *.a
 *.hex
 *.vcd
-dumphex
-test
-result-iverilog
-result-verilator
 
 # FPGA
 fpga/ice40/build/
@@ -29,4 +24,7 @@ build/formal/
 
 # macOS
 .DS_Store
-tests/doom/doom1.wad
+
+# Editor
+.vscode/
+sw/doom/doom1.wad
