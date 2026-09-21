@@ -1,7 +1,10 @@
 #
 
 include site-config.sh
-goal: result-iverilog
+
+# Without this the first rule in the file, libmc/libmc.a, would be the default.
+.DEFAULT_GOAL := run-tests-iverilog
+
 CC=$(RISCV_PREFIX)-gcc
 AS=$(RISCV_PREFIX)-as
 LD=$(RISCV_PREFIX)-ld
@@ -20,14 +23,10 @@ LD=$(RISCV_PREFIX)-ld
 CSTD=-std=gnu17
 
 SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
-CCFLAGS=-march=$(MARCH) -mabi=$(MABI) $(CSTD) -Wno-builtin-declaration-mismatch -Ilibmc
 LDFLAGS=-m $(LDEMUL) --script ld.script
 LDPOSTFLAGS= -Llibmc -lmc  -Llibmc -lmc -L$(RISCV_LIB) -lgcc
 TOOLS=dumphex
 LIBS=libmc/libmc.a
-
-TEST_S=start.s
-TEST_C=test.c
 
 # --------------------------------------------------------------------
 # Per-file RV32I assembly tests (each builds to its own ELF/hex images)
@@ -59,13 +58,7 @@ SIM_TIMEOUT ?= 120000
 
 SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_TIMEOUT)
 
-.PHONY: run-tests-iverilog run-one-iverilog run-legacy-iverilog
-
-.c.o:
-	$(CC) $(CCFLAGS) -c $*.c
-
-.s.o:
-	$(AS) $(SSFLAGS) -c $*.s -o $*.o
+.PHONY: run-tests-iverilog run-one-iverilog
 
 build/%.o: %.s tests/common/test_macros.s tests/common/test_runtime.s
 	mkdir -p $(dir $@)
@@ -90,10 +83,6 @@ libmc/libmc.a: $(LIBMC_SRC)
 
 dumphex: dumphex.c
 	gcc -o dumphex dumphex.c
-
-test: $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LIBS) $(TOOLS)
-	$(LD) $(LDFLAGS) -o test $(TEST_S:.s=.o) $(TEST_C:.c=.o) $(LDPOSTFLAGS)
-	/bin/bash ./elftohex.sh test .
 
 # Every RTL file the simulator pulls in, in one list. It was previously spelled
 # out per target and had already fallen behind -- a missing entry means make
@@ -129,8 +118,6 @@ rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests
 		python3 host/rvfi_check.py --all --mem-latency $$d > build/rvfi-$$d.log 2>&1 \
 			&& echo ok || { echo "FAILED -- build/rvfi-$$d.log"; rc=1; }; \
 	done; exit $$rc
-
-run-legacy-iverilog: result-iverilog
 
 # Run one test by stem under tests/ (e.g. TEST_STEM=isa/add_sub)
 run-one-iverilog: $(TOOLS) $(SIM_IVERILOG)
@@ -225,25 +212,8 @@ latency-sweep: $(TOOLS) $(SIM_IVERILOG)
 	run "MEM_LATENCY=8 STALL_RATE=128" 8 128 4000000 "latency-8-stall.log"; \
 	exit $$rc
 
-# -Wno-fatal for the same reason the coverage build has it: Verilator reports
-# circular combinational logic through the control block's advance signals, which
-# is a false positive at struct granularity -- it merges every field of
-# stage_control_signal_t into one node. The loop predates all of this and the
-# declarations in `core` already carry a lint_off for it. Without the flag this
-# target simply fails to build, which is how it had been sitting.
-result-verilator: $(RTL_CORE) verilator_top.cpp test
-	 $(VERILATOR) -O0 --cc --build --top-module top -Wno-fatal top.sv verilator_top.cpp --exe
-	 cp obj_dir/Vtop ./result-verilator
-	 rm -rf obj_dir
-	 ./result-verilator
-
-result-iverilog: itop.sv top.sv cpu.sv test
-	 $(IVERILOG) -g2012 -o result-iverilog itop.sv
-	 ./result-iverilog
-	 rm result-iverilog
-
 clean:
-	rm -rf dumphex test.vcd obj_dir/ *.o result-verilator result-iverilog *.hex test.bin test build
+	rm -rf dumphex test.vcd *.hex build
 	$(MAKE) -C libmc clean
 
 
@@ -439,10 +409,6 @@ DOOM_OBJS := $(addprefix $(DOOM_OUT)/,$(addsuffix .o,$(DOOM_NAMES))) \
 
 # CMAP256 selects the 8bpp path. NORMALUNIX and LINUX are what doomgeneric's own
 # ports define; they gate the POSIX-ish bits it expects to exist.
-# Renderer cost, set at build time -- see tests/doom/doomgeneric_rv32.c.
-#   DOOM_DETAIL=1   low detail; half the columns drawn
-#   DOOM_BLOCKS=N   3D view size 3..11, 10 is the default full-width view
-
 DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -mstrict-align \
                -DDOOM_DETAIL=$(DOOM_DETAIL) -DDOOM_BLOCKS=$(DOOM_BLOCKS) -DDOOM_REALTIME=$(DOOM_REALTIME) \
                -DCMAP256 -DNORMALUNIX -DLINUX \
@@ -454,16 +420,11 @@ DOOM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -mstrict-align \
 
 .PHONY: doom doom-sim
 
-# A stamp recording the flags the objects were built with, so that changing a
-# flag rebuilds them.
-#
-# Objects otherwise depend on their source and nothing else, which makes
-# `make DOOM_DETAIL=1 doom` a silent no-op after a default build: make sees an
-# up-to-date .o and the flag does nothing at all. Not hypothetical -- it
-# invalidated a four-way benchmark here, in which every configuration measured
-# the same binary and returned identical cycle counts to the digit. Same shape
-# as the stale libmc.a that survived the ISA switch.
-#
+# Objects depend on their source and nothing else. That is only safe because
+# DOOM_OUT has the flags in its path: without it, `make DOOM_DETAIL=1 doom` after
+# a default build is a silent no-op. Not hypothetical -- it invalidated a
+# four-way benchmark here, in which every configuration measured the same binary
+# and returned identical cycle counts to the digit.
 $(DOOM_OUT)/%.o: $(DOOM_SRC)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(DOOM_CFLAGS) -c $< -o $@
@@ -664,20 +625,12 @@ doom-watch: $(DOOM_SNAP) | build/doom/Vtop
 
 # --------------------------------------------------------------------
 # Official riscv-tests rv32um suite (M extension).
-#
-# Built with its own -march rather than the global one, so the M tests can be
-# brought up while every other program in the tree is still plain rv32i. Once the
-# extension is finished MARCH in site-config.sh moves to rv32im_zicsr and this
-# override becomes redundant -- but the two must stay separable until then, or a
-# half-finished multiplier breaks every existing test at once.
 # --------------------------------------------------------------------
 RVTESTS_M_DIR := tests/riscv-tests/isa/rv32um
 RVTESTS_M     := $(basename $(notdir $(wildcard $(RVTESTS_M_DIR)/*.S)))
 RVTESTS_M_ELF := $(addprefix build/riscv-tests-m/,$(addsuffix .elf,$(RVTESTS_M)))
 
-MARCH_M := rv32im_zicsr
-
-RVTEST_M_FLAGS := -march=$(MARCH_M) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
+RVTEST_M_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
                   -Itests/riscv-tests-env -Itests/riscv-tests/isa/macros/scalar \
                   -T tests/riscv-tests-env/link.ld
 
@@ -720,12 +673,12 @@ DHRY_OUT  := build/tests/bench/dhrystone
 DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Ilibmc -I$(DHRY_DIR) \
               -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
               -Wno-implicit-int -Wno-return-type
-DHRY_OBJS := $(DHRY_OUT)/start.o $(DHRY_OUT)/dhrystone.o \
+DHRY_OBJS := $(DHRY_OUT)/crt0.o $(DHRY_OUT)/dhrystone.o \
              $(DHRY_OUT)/dhrystone_main.o $(DHRY_OUT)/port.o
 
 .PHONY: dhrystone
 
-$(DHRY_OUT)/start.o: start.s
+$(DHRY_OUT)/crt0.o: $(DHRY_DIR)/crt0.s
 	mkdir -p $(dir $@)
 	$(AS) $(SSFLAGS) -c $< -o $@
 

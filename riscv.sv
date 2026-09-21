@@ -5,11 +5,7 @@
 `include "base.sv"
 
 package riscv;
-`ifdef __64bit__
-`include "riscv64_common.sv"
-`else
 `include "riscv32_common.sv"
-`endif
 endpackage;
 
 `endif

@@ -85,10 +85,6 @@ module memory32 #(
 endmodule
 
 
-`ifdef __64bit__
-`define memory memory64
-`else
 `define memory memory32
-`endif
 
 `endif
