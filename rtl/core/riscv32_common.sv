@@ -1,15 +1,9 @@
+// The M extension is on unless a build turns it off with -Dext_m_disable
 
-// The M extension is on unless a build turns it off with -Dext_m_disable.
-//
-// It is not free: a combinational 32x32 multiplier costs roughly 3000 LUT4 on
-// an iCE40, which takes the pico2-ice build from 4916 to 8019 and well past the
-// 5280 that part has. That board's gateware therefore builds without it. On the
-// Cyclone V the multiplier maps to DSP blocks and the area is not the issue.
 `define tag_size            5
 
 // Package-local alias. `bool` is also declared at compilation-unit scope in
-// base.sv, but $unit types are not visible inside a package. Icarus has `bool`
-// built in, so it must not be redeclared there.
+// base.sv, but $unit types are not visible inside a package.
 `ifndef __ICARUS__
 typedef logic bool;
 `endif
@@ -41,7 +35,6 @@ function automatic bool is_16bit_instruction(logic [31:0] instr);
         return 1'b1;
 endfunction
 
-////// 32 bit instruction decode helpers.
 function automatic tag decode_rs2(instr32 instr);
     return instr[24:20];
 endfunction
@@ -58,7 +51,6 @@ function automatic tag decode_rd(instr32 instr);
     return instr[11:7];
 endfunction
 
-// Must match instruction encoding
 typedef enum logic [2:0] {
     f3_addsub  = 0
     ,f3_sll = 1
@@ -70,7 +62,6 @@ typedef enum logic [2:0] {
     ,f3_and = 7
 }   f3_op;
 
-// Must match instruction encoding
 typedef enum logic [2:0] {
      f3_ext_m_mul = 3'd0
     ,f3_ext_m_mulh = 3'd1
@@ -167,18 +158,11 @@ typedef enum logic [4:0] {
 } opcode_q;
 
 function automatic opcode_q decode_opcode_q(instr32 instr);
-    // Every 32-bit instruction has instr[1:0] == 2'b11. Any other value is a
-    // 16-bit compressed encoding, which this core does not implement, so it is
-    // illegal. Checking only instr[6:2] decoded the all-zero word -- the
-    // canonical illegal instruction -- as `lb x0, 0(x0)` and executed it.
     if (instr[1:0] != 2'b11)
         return q_unknown;
 
-    // return instr[6:2]   --- this works too, but the code below detects opcodes we don't support
     case (instr[6:2])
 // Unfortunately Vivado complains about the simple way. So we take the long way (below)
-//        q_load, q_store, q_branch, q_jalr,
-//        q_jal, q_op_imm, q_op, q_auipc, q_lui:   return instr[6:2];
             q_load:     return q_load;
             q_store:    return q_store;
             q_branch:   return q_branch;
@@ -189,10 +173,8 @@ function automatic opcode_q decode_opcode_q(instr32 instr);
             q_auipc:    return q_auipc;
             q_lui:      return q_lui;
             q_system:   return q_system;
-            // FENCE. This core has a single in-order pipeline and separate
-            // instruction and data memories, so it is architecturally a NOP --
-            // but it must decode, or it would now raise an illegal-instruction
-            // trap.
+            // architecturally for this core a NOP, but, it must be decode so no
+            // illegal-instruction trap is raised
             q_misc_mem: return q_misc_mem;
         default:
             return q_unknown;
@@ -202,14 +184,11 @@ endfunction
 function automatic bool decode_writeback(opcode_q in);
     case (in)
         q_load, q_jalr, q_jal, q_op_imm, q_op, q_auipc, q_lui:  return 1'b1;
-        // SYSTEM writes rd only for the CSR forms; execute squashes the write
-        // for ECALL/EBREAK/MRET, which encode rd as x0 anyway.
         q_system: return 1'b1;
         default: return 1'b0;
     endcase
 endfunction
 
-// Must match instruction encoding
 typedef enum logic [2:0] {
      memory_b = 0
     ,memory_h = 1
@@ -250,28 +229,19 @@ function automatic funct7 decode_funct7(instr32 instr, instr_format format);
     return 7'd0;
 endfunction
 
-// ---------------------------------------------------------------------------
-// Machine-mode CSRs and traps.
-//
-// Only the handful the base ISA needs to take and return from a trap. Anything
-// unimplemented reads as zero and ignores writes, which is what the spec allows
-// for read-only-zero CSRs and keeps the register file tiny.
-// ---------------------------------------------------------------------------
+// Anything unimplemented reads as zero and ignores writes
 localparam [11:0] csr_mstatus = 12'h300;
 localparam [11:0] csr_mtvec   = 12'h305;
 localparam [11:0] csr_mepc    = 12'h341;
 localparam [11:0] csr_mcause  = 12'h342;
 localparam [11:0] csr_mtval   = 12'h343;
 
-// Machine counters, read-only. Software needs a cycle count to benchmark
-// itself, and rdcycle/mcycle is how it expects to get one -- Dhrystone's
-// riscv variant reads mcycle directly.
+// Machine counters, read-only, Software needs a cycle count to benchmark itself
 localparam [11:0] csr_mcycle    = 12'hB00;
 localparam [11:0] csr_minstret  = 12'hB02;
 localparam [11:0] csr_mcycleh   = 12'hB80;
 localparam [11:0] csr_minstreth = 12'hB82;
 
-// Standard mcause codes for the exceptions this core can raise.
 localparam [31:0] cause_misaligned_fetch = 32'd0;
 localparam [31:0] cause_illegal_instr    = 32'd2;
 localparam [31:0] cause_breakpoint       = 32'd3;
@@ -279,7 +249,6 @@ localparam [31:0] cause_misaligned_load  = 32'd4;
 localparam [31:0] cause_misaligned_store = 32'd6;
 localparam [31:0] cause_ecall_m          = 32'd11;
 
-// funct3 for the SYSTEM opcode. 0 is the non-CSR group (ECALL/EBREAK/MRET).
 typedef enum logic [2:0] {
      f3_priv   = 3'b000
     ,f3_csrrw  = 3'b001
@@ -294,16 +263,14 @@ function automatic bool is_csr_op(funct3 f3);
     return (f3 != 3'b000);
 endfunction
 
-// Alignment check for a data access of the width implied by funct3.
 function automatic bool is_misaligned(word addr, memory_op op);
     case (op)
         memory_h, memory_hu: return addr[0];
         memory_w:            return (addr[1:0] != 2'b00);
-        default:             return 1'b0;   // byte accesses are always aligned
+        default:             return 1'b0;
     endcase
 endfunction
 
-// Must match instruction encoding
 typedef enum logic [2:0] {
      beq = 0
     ,bne = 1
@@ -313,30 +280,13 @@ typedef enum logic [2:0] {
     ,bgeu = 7
 }   branch_ops;
 
-// Branch condition, evaluated from the operands rather than from the ALU
-// result on purpose.
-//
-// Taking it from the ALU put the branch decision *after* the ALU's output mux,
-// which put the next-PC adder after that again -- two 32-bit adders and a wide
-// case mux in series on the critical path. Its own subtractor runs in parallel
-// with the ALU instead. The result is the same; only the depth changes.
 function automatic bool take_branch(ext_operand in1, ext_operand in2,
                                    funct3 f3); begin
-    logic [`word_size:0] diff = {1'b0, in1[`word_size-1:0]}
-                              - {1'b0, in2[`word_size-1:0]};
+    logic [`word_size:0] diff = {1'b0, in1[`word_size-1:0]} - {1'b0, in2[`word_size-1:0]};
     logic is_zero = (diff[`word_size-1:0] == `word_size'd0) ? 1'b1 : 1'b0;
 
-    // bit 32 is the borrow out of an unsigned subtract, i.e. exactly
-    // (in1 <u in2).
     logic ult = diff[`word_size];
 
-    // Signed less-than is NOT the sign bit of that difference: when the signed
-    // subtraction overflows, the truncated result has the wrong sign. Flipping
-    // both sign bits maps signed order onto unsigned order, which is the same
-    // as xor-ing them into the unsigned result.
-    //
-    // e.g. in1 = 0x8534f457 (-2060127145), in2 = 0x2c33be0a (741588490):
-    // in1 <s in2 is true, but bit 31 of the difference is 0.
     logic slt = ult ^ in1[`word_size - 1] ^ in2[`word_size - 1];
 
     case (f3)
@@ -352,27 +302,11 @@ function automatic bool take_branch(ext_operand in1, ext_operand in2,
 end
 endfunction
 
-// Next PC, together with whether fetch already went there.
 typedef struct packed {
     word_address next_pc;
-    bool         mispredict;   // fetch is not presenting next_pc
+    bool         mispredict;
 } next_pc_result_t;
 
-// Next PC.
-//
-// Two things are deliberately parallel here rather than serial:
-//
-//   * The three candidate targets are added up front, in parallel with each
-//     other and with the ALU. Previously this built one adder whose *operands*
-//     were chosen by the opcode and branch condition, chaining the adder
-//     behind everything that produced them.
-//   * Each candidate is compared against the address fetch is presenting, so
-//     the 32-bit comparison happens alongside the adders and only a 1-bit
-//     select is serial. Comparing after the target mux put a full-width
-//     compare directly in front of the control logic.
-//
-// Returning both from one function keeps the value and the mispredict flag
-// from drifting apart.
 function automatic next_pc_result_t compute_next_pc(
      ext_operand    rd1
     ,ext_operand    rd2
@@ -390,11 +324,7 @@ function automatic next_pc_result_t compute_next_pc(
 
     pc_plus_4   = pc + `word_size'd4;
     pc_plus_imm = pc + imm;
-    // "The target address is obtained by adding the sign-extended 12-bit
-    // I-immediate to the register rs1, then setting the least-significant bit
-    // of the result to zero." Without this an odd target is fetched as-is: the
-    // memory drops the low address bits but shuffle_store_data still rotates
-    // the word by addr[1:0], so the pipeline executes garbage.
+
     rs1_plus_imm = (rd1[`word_size-1:0] + imm) & ~(`word_size'd1);
 
     miss_p4   = (pc_plus_4    != fetched_pc);
@@ -438,26 +368,10 @@ function automatic ext_operand execute(
         q_jal, q_jalr:      result = { 1'b0, pc } + 4;
         q_branch:           result = { 1'b0, operand1[`word_size-1:0] } - { 1'b0, operand2[`word_size-1:0] };
         q_load, q_store, q_amo:    result = operand1 + operand2;
-        // The CSR read value is muxed in by the execute stage, which owns the
-        // CSR file; nothing useful to compute here.
+        // The CSR read value is muxed in by the execute stage, which owns the CSR file; nothing useful to compute here.
         q_system, q_misc_mem:  result = 0;
 `ifndef ext_m_disable
         q_op, q_op_imm: if ((op_q == q_op) && (f7 == f7_ext_mul)) begin
-            // ---------------------------------------------------------------
-            // M extension, multiply half.
-            //
-            // Combinational, unlike divide, because this is the operation Doom's
-            // fixed-point maths runs on every inner loop -- putting it through an
-            // iterative unit would cost thirty cycles apiece and defeat the point
-            // of having the extension at all. It is a wide combinational path and
-            // a candidate for pipelining once there is a real fMax number to
-            // measure it against.
-            //
-            // The three high-half forms differ only in how the operands are
-            // extended to 33 bits, so they share one 66-bit product. The low half
-            // is the same for all signednesses, which is why MUL needs no variant
-            // of its own.
-            // ---------------------------------------------------------------
             logic signed [32:0] ext_a, ext_b;
             logic signed [65:0] product;
 
@@ -490,7 +404,6 @@ function automatic ext_operand execute(
                         result = f7_mod(f7) ? (operand1 - operand2) : (operand1 + operand2);
                 f3_slt:     result = (operand1 < operand2) ? 1 : 0;
                 f3_sltu:    result = { 1'b0, operand1[`word_size-1:0] } < { 1'b0, operand2[`word_size-1:0] } ? 1 : 0;
-                // RV32I: shifts use a 5-bit shift amount (rs2[4:0] or shamt[4:0])
                 f3_sll: begin
                     word       sh_op1;
                     word       sh_res;
@@ -507,9 +420,9 @@ function automatic ext_operand execute(
                     sh_op1 = operand1[`word_size-1:0];
                     sh_amt = operand2[4:0];
                     if (f7_mod(f7))
-                        sh_res = $signed(sh_op1) >>> sh_amt;   // SRA / SRAI (arithmetic)
+                        sh_res = $signed(sh_op1) >>> sh_amt;
                     else
-                        sh_res = sh_op1 >> sh_amt;             // SRL / SRLI (logical)
+                        sh_res = sh_op1 >> sh_amt;
                     result = {1'b0, sh_res};
                 end
                 f3_xor:     result = operand1 ^ operand2;
@@ -518,9 +431,6 @@ function automatic ext_operand execute(
                 default: result = 0;   // unreachable: f3 is fully decoded above
             endcase
         end
-        // q_unknown lands here. It is no longer a "cannot happen" case: the
-        // execute stage raises an illegal-instruction trap for it, so this
-        // just needs to produce something harmless.
         default: result = 0;
     endcase
     //if (op_q == q_op_imm32 && f3 == f3_addsub)
