@@ -1,51 +1,41 @@
-#include <verilated.h>          // Defines common routines
-#include <iostream>             // Need std::cout
+#include <verilated.h>
+#include <iostream>
 #include <cstdlib>
-#include "Vtop.h"               // From Verilating "top.v"
+#include "Vtop.h"
 #if VM_COVERAGE
 # include <verilated_cov.h>
 #endif
 
-Vtop *top;                      // Instantiation of module
+Vtop *top;
 
-vluint64_t main_time = 0;       // Current simulation time
-// This is a 64-bit integer to reduce wrap over issues and
-// allow modulus.  This is in units of the timeprecision
-// used in Verilog (or from --timescale-override)
+vluint64_t main_time = 0;
 
-double sc_time_stamp () {       // Called by $time in Verilog
-    return main_time;           // converts to double, to match
-                               // what SystemC does
+double sc_time_stamp () {
+    return main_time;
 }
 
 int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);   // Remember args
+    Verilated::commandArgs(argc, argv);
 
-    top = new Vtop;             // Create instance
+    top = new Vtop;
 
-    top->reset = 1;           // Set some inputs
+    top->reset = 1;
 
-    // Same knob as the iverilog testbench's +stallrate.
     top->stall_rate = 0;
     if (const char *sr = std::getenv("RV32_STALL_RATE"))
         top->stall_rate = (unsigned char)std::strtoul(sr, nullptr, 10);
 
-    // Same knob as +memlatency: makes both memories answer late and refuse
-    // requests while busy. 0 is a single-cycle memory. Worth sweeping alongside
-    // RV32_STALL_RATE in the coverage runs, since the miss stalls are otherwise
-    // unreachable and would sit at zero coverage.
     top->mem_delay = 0;
     if (const char *md = std::getenv("RV32_MEM_LATENCY"))
         top->mem_delay = (unsigned char)std::strtoul(md, nullptr, 10);
 
-    // Watchdog, so a program that never halts cannot hang a coverage sweep.
     vluint64_t max_time = 2000000;
     if (const char *env = std::getenv("RV32_MAX_CYCLES"))
         max_time = std::strtoull(env, nullptr, 10);
 
     while (!Verilated::gotFinish()) {
         if (main_time > 10)
-            top->reset = 0;   // Deassert reset
+            top->reset = 0;
         top->clk = 1;
         top->eval();
         top->clk = 0;
@@ -56,16 +46,14 @@ int main(int argc, char** argv) {
             std::cout << "TIMEOUT" << std::endl;
             break;
         }
-        main_time++;            // Time passes...
+        main_time++;
     }
 
-    top->final();               // Done simulating
+    top->final();
 
 #if VM_COVERAGE
-    // One file per run; the Makefile merges them with verilator_coverage.
     const char *cov = std::getenv("RV32_COVERAGE_FILE");
     Verilated::threadContextp()->coveragep()->write(cov ? cov : "coverage.dat");
 #endif
-    //    // (Though this example doesn't get here)
     delete top;
 }
