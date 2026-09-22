@@ -1,5 +1,5 @@
-# DE1-SoC gateware. Synthesis happens on EC2 (see infra/); this Makefile is for
-# the parts that can be simulated locally, which is most of them.
+# DE1-SoC gateware. Synthesis happens in Quartus; this Makefile is for the
+# parts that can be simulated locally, which is most of them.
 #
 #   make sim        every block-level testbench
 #   make vga ps2    one at a time

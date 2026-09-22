@@ -1,9 +1,7 @@
 `ifndef _base_
 `define _base_
 
-// Icarus has `bool` as a built-in keyword, so typedef'ing it there is an error.
-// Every other tool (verilator, sv2v/yosys) needs the declaration -- without it
-// the ISA package's function return types do not parse.
+// Icarus has `bool` as a built-in keyword so typedef'ing it is an error
 `ifndef __ICARUS__
 typedef logic bool;
 `endif

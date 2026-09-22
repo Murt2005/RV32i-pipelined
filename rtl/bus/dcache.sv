@@ -4,33 +4,7 @@
 `include "system.sv"
 `include "memory_io.sv"
 
-// ---------------------------------------------------------------------------
-// Data cache for the SDRAM region: direct mapped, write-through, no write
-// allocate.
-//
-// Write-through rather than write-back on purpose, and it is not simply the
-// easier option being dressed up. A write-back cache needs a dirty bit per line
-// and an eviction path that writes a line out before reading the new one in --
-// more state, and a second reason for a miss to take a long time. Write-through
-// keeps a line clean by construction, so a miss is always a plain fill.
-//
-// The thing that usually argues for write-back is the store bandwidth, and here
-// the hottest store stream by far is the framebuffer, which is a separate target
-// that never comes through this cache at all. That removes most of the pressure
-// before it starts. If profiling later says otherwise, adding a dirty bit is a
-// change to this file.
-//
-// No write allocate: a store that misses is sent straight to memory and does not
-// pull the line in. Writing a whole line to fill it, only to then overwrite part
-// of it, costs a read the program never asked for. A store that hits does update
-// the cached copy, so a read-after-write to the same line still hits.
-//
-// Ordering: a store is posted -- acknowledged as soon as it is accepted by the
-// memory below, not when it lands -- but only one access is ever outstanding, so
-// a later load cannot overtake an earlier store. That is what makes it safe to
-// skip a write buffer entirely for now; a deeper buffer is only worth having
-// once the core can issue more than one access at a time.
-// ---------------------------------------------------------------------------
+// Data cache for the SDRAM region: direct mapped, write-through, no write allocate
 module dcache #(
     parameter int line_words = 8,          // 32-byte lines
     parameter int sets       = 512         // 512 * 32 = 16 KiB
@@ -83,10 +57,6 @@ logic             look_valid;
 
 wire hit = look_valid & (look_tag == pend_tag);
 
-// Zeroed for the same reason memory.sv zeroes its arrays: an uninitialised RAM
-// reads as X, and X does not stay put. rvfi_mem_rdata samples the data response
-// unconditionally, so a single X word turns the commit record into "xxxxxxxx"
-// and the cross-check dies parsing it rather than reporting a mismatch.
 initial begin
     for (int k = 0; k < sets*line_words; k++) data_ram[k] = 32'd0;
     for (int k = 0; k < sets; k++) begin
@@ -99,9 +69,6 @@ initial begin
 end
 
 
-// Byte-wise merge of a store into a cached word, so a partial write updates the
-// copy here as well as memory. Without it the cache would serve the pre-store
-// value for the untouched lanes on the next read.
 function automatic logic [31:0] merge(logic [31:0] old_w, logic [31:0] new_w,
                                       logic [3:0] mask);
     merge = {mask[3] ? new_w[31:24] : old_w[31:24],
@@ -110,9 +77,6 @@ function automatic logic [31:0] merge(logic [31:0] old_w, logic [31:0] new_w,
              mask[0] ? new_w[7:0]   : old_w[7:0]};
 endfunction
 
-// ready is built only from registers, never from the request -- see the note in
-// bus/decoder.sv. Accepting during a read hit keeps back-to-back loads at one
-// per cycle.
 wire can_accept = (state == S_IDLE) | ((state == S_LOOK) & hit & ~pend_write);
 wire take       = cpu_req.valid & can_accept
                 & (is_any_byte(cpu_req.do_read) | is_any_byte(cpu_req.do_write));
@@ -128,7 +92,6 @@ assign cpu_rsp.data     = (state == S_DONE) ? data_ram[{pend_idx, pend_word}]
 always_comb begin
     mem_req = memory_io_no_req;
     if (state == S_WRITE) begin
-        // Write-through: the store goes to memory whether or not it hit.
         mem_req.addr     = pend_addr;
         mem_req.data     = pend_data;
         mem_req.do_write = pend_wmask;
@@ -164,8 +127,6 @@ always_ff @(posedge clk) begin
                     state      <= S_LOOK;
                 end else if (state == S_LOOK) begin
                     if (pend_write) begin
-                        // A store updates the cached copy only if the line is
-                        // already here; no write allocate.
                         if (hit)
                             data_ram[{pend_idx, pend_word}] <=
                                 merge(look_data, pend_data, pend_wmask);

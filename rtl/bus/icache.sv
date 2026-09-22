@@ -4,40 +4,7 @@
 `include "system.sv"
 `include "memory_io.sv"
 
-// ---------------------------------------------------------------------------
 // Instruction cache: direct mapped, read only, one line fill at a time.
-//
-// Sits between the instruction decoder's SDRAM port and the arbiter, so it
-// caches SDRAM and nothing else. On-chip instruction memory keeps its
-// single-cycle path and is not slowed down by a lookup it does not need.
-//
-// A hit answers in one cycle, which is not merely a performance nicety. Fetch's
-// stall for a slow instruction memory holds one extra cycle across the arrival
-// of a late response and re-fetches it. That is correct only if the retry can be
-// answered in one cycle; against a target that is always slower, the retry is
-// late too, is dropped again, and the machine fetches the same address forever.
-// The cache is what makes the retry a hit -- and it is why the arbiter grants
-// combinationally rather than through a holding register.
-//
-// Consequences worth stating:
-//   * a miss is answered at the end of the fill, that answer is discarded by
-//     the stretch, and the re-fetch hits. A miss costs the fill plus about two
-//     cycles. The alternative is rewriting fetch's replay, which is the one part
-//     of this core that has already produced a silently wrong execution.
-//   * a response is delivered for every accepted request, late or not. Refusing
-//     to answer is simpler but breaks the memory_io contract and trips the
-//     core's own outstanding-access checker.
-//
-// Direct mapped, not the two-way the plan called for. Two-way resists the
-// thrashing a renderer produces -- a texture column, a source patch and a
-// destination pointer live at once -- but that is the *data* side. The
-// instruction stream is one mostly-sequential flow. Adding ways later is a
-// change to this file alone.
-//
-// `invalidate` drops every line. The loader writes a program into SDRAM through
-// the data port; without this the instruction side keeps serving whatever it
-// read from those addresses beforehand.
-// ---------------------------------------------------------------------------
 module icache #(
     parameter int line_words = 8,          // 32-byte lines
     parameter int sets       = 512         // 512 * 32 = 16 KiB
@@ -80,17 +47,12 @@ logic [WORD_W:0]    fill_count;
 logic [WORD_W-1:0]  fill_word;
 logic               fill_issued;
 
-// Registered lookup, so a hit is a plain one-cycle memory from the core's side.
 logic [31:0]      look_data;
 logic [TAG_W-1:0] look_tag;
 logic             look_valid;
 
 wire hit = look_valid & (look_tag == pend_tag);
 
-// Zeroed for the same reason memory.sv zeroes its arrays: an uninitialised RAM
-// reads as X, and X does not stay put. rvfi_mem_rdata samples the data response
-// unconditionally, so a single X word turns the commit record into "xxxxxxxx"
-// and the cross-check dies parsing it rather than reporting a mismatch.
 initial begin
     for (int k = 0; k < sets*line_words; k++) data_ram[k] = 32'd0;
     for (int k = 0; k < sets; k++) begin
@@ -103,14 +65,6 @@ initial begin
 end
 
 
-// ready is built only from registers -- never from the request. Making it depend
-// on the address would put the initiator's valid and this target's ready in a
-// combinational cycle; see the note in bus/decoder.sv. `hit` qualifies, since
-// every term of it is a register.
-//
-// Accepting during a hit is what keeps fetch at one instruction per cycle.
-// Without it the cache answers every other cycle and halves the fetch rate --
-// which shows up as every cycle count doubling, not as a failure.
 wire can_accept = (state == S_IDLE) | ((state == S_LOOK) & hit);
 wire take       = cpu_req.valid & can_accept & is_any_byte(cpu_req.do_read);
 
@@ -137,8 +91,6 @@ always_ff @(posedge clk) begin
         for (i = 0; i < sets; i = i + 1)
             valid_ram[i] <= 1'b0;
     end else begin
-        // An invalidate may arrive at any time. A line mid-fill is dropped with
-        // the rest and the access that caused it simply misses again.
         if (invalidate)
             for (i = 0; i < sets; i = i + 1)
                 valid_ram[i] <= 1'b0;
@@ -161,7 +113,7 @@ always_ff @(posedge clk) begin
                         fill_word           <= '0;
                         fill_count          <= '0;
                         fill_issued         <= 1'b0;
-                        valid_ram[pend_idx] <= 1'b0;   // not valid until filled
+                        valid_ram[pend_idx] <= 1'b0;
                         state               <= S_FILL;
                     end
                 end
@@ -184,7 +136,6 @@ always_ff @(posedge clk) begin
                 end
             end
 
-            // One cycle presenting the answer for the access that missed.
             S_DONE: state <= S_IDLE;
 
             default: state <= S_IDLE;
