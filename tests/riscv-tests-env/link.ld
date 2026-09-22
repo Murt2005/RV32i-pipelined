@@ -1,9 +1,6 @@
-/* Link script for the riscv-tests rv32ui suite.
- *
- * Same split as tests/common/link.ld -- .text into the instruction memory at 0x00010000,
- * everything else into the data memory at 0x00020000 -- but it also collects
- * the .text.* / .rodata.* / .data.* variants the suite emits, and drops the
- * .tohost section its macros reference but this environment does not use.
+/* Places the riscv-tests on this core's memory: code goes in instruction
+ * memory, data in data memory. The tests report their result by writing to
+ * tohost at 0x0002FFC0, and the testbench stops when it sees the write there.
  */
 SECTIONS
 {
@@ -15,5 +12,8 @@ SECTIONS
   .data         : { *(.data) *(.data.*) }
   .bss          : { *(.bss) *(.bss.*) *(COMMON) }
 
-  /DISCARD/     : { *(.tohost) *(.comment) *(.riscv.attributes) }
+  . = 0x0002FFC0;
+  .tohost       : { *(.tohost) }
+
+  /DISCARD/     : { *(.comment) *(.riscv.attributes) }
 }

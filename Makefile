@@ -168,8 +168,7 @@ run-tests-iverilog: $(TOOLS) $(SIM_IVERILOG)
 CYCLE_DIR := tests/cycles
 CYCLE_LOG := build/cycles
 CYCLE_SUITES := directed:run-tests-iverilog \
-                rv32ui:run-riscv-tests-iverilog \
-                rv32ui-p:run-riscv-tests-p-iverilog
+                rv32ui:run-riscv-tests-iverilog
 
 .PHONY: cycle-baseline cycle-check
 
@@ -227,9 +226,14 @@ clean:
 # --------------------------------------------------------------------
 # Official riscv-tests rv32ui suite
 #
-# Uses a local environment (tests/riscv-tests-env) instead of the suite's own
-# `p` environment, which reports results through machine-mode CSRs and ECALL
-# that this core does not implement.
+# Built against the suite's own stock `p` environment. It boots through
+# mtvec/PMP/mstatus setup and an MRET, and reports through an ECALL trap handler
+# writing `tohost`, so every test also exercises the trap machinery. The only
+# local piece is the link script, which fits the tests to this memory map and
+# puts .tohost where the tops treat a write as a halt.
+#
+# tohost is (TESTNUM << 1) | 1: 1 is a pass, anything else names the failing
+# test number.
 # --------------------------------------------------------------------
 RVTESTS_DIR := tests/riscv-tests/isa/rv32ui
 
@@ -242,68 +246,42 @@ RVTESTS_ALL   := $(basename $(notdir $(wildcard $(RVTESTS_DIR)/*.S)))
 RVTESTS       := $(filter-out $(RVTESTS_EXCLUDE),$(RVTESTS_ALL))
 RVTESTS_ELF   := $(addprefix build/riscv-tests/,$(addsuffix .elf,$(RVTESTS)))
 
+RVTEST_LD    := tests/riscv-tests-env/link.ld
 RVTEST_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
-                -Itests/riscv-tests-env -Itests/riscv-tests/isa/macros/scalar \
-                -T tests/riscv-tests-env/link.ld
+                -Itests/riscv-tests/env/p -Itests/riscv-tests/env \
+                -Itests/riscv-tests/isa/macros/scalar -T $(RVTEST_LD)
 
-.PHONY: riscv-tests run-riscv-tests-iverilog riscv-tests-p run-riscv-tests-p-iverilog
+# $(call run-rvtests,suite,tests,elf-dir)
+define run-rvtests
+@pass=0; fail=0; \
+	for t in $(2); do \
+		d=$(HEX)/$(3)/$$t; \
+		/bin/bash tools/elftohex.sh build/$(3)/$$t.elf $$d >/dev/null 2>&1; \
+		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		th=`echo "$$raw" | sed -n 's/^TOHOST=\([0-9]*\).*/\1/p' | head -1`; \
+		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
+		if [ "$$th" = "1" ]; then \
+			pass=$$((pass+1)); echo "PASS $(1)-$$t  finish=$$cyc"; \
+		elif [ -n "$$th" ]; then \
+			fail=$$((fail+1)); echo "FAIL $(1)-$$t  (test $$((th >> 1)))"; \
+		else \
+			fail=$$((fail+1)); echo "FAIL $(1)-$$t  (no tohost write)"; \
+		fi; \
+	done; \
+	echo ""; echo "$$pass passed, $$fail failed, `echo $(2) | wc -w | tr -d ' '` total"; \
+	[ $$fail -eq 0 ]
+endef
 
-build/riscv-tests/%.elf: $(RVTESTS_DIR)/%.S tests/riscv-tests-env/riscv_test.h
+.PHONY: riscv-tests run-riscv-tests-iverilog
+
+build/riscv-tests/%.elf: $(RVTESTS_DIR)/%.S $(RVTEST_LD)
 	mkdir -p $(dir $@)
 	$(CC) $(RVTEST_FLAGS) -o $@ $<
 
 riscv-tests: $(RVTESTS_ELF)
 
 run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
-	@pass=0; fail=0; \
-	for t in $(RVTESTS); do \
-		d=$(HEX)/riscv-tests/$$t; \
-		/bin/bash tools/elftohex.sh build/riscv-tests/$$t.elf $$d >/dev/null 2>&1; \
-		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
-		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
-		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
-		if [ "$$out" = "PASS" ]; then \
-			pass=$$((pass+1)); echo "PASS rv32ui-$$t  finish=$$cyc"; \
-		else \
-			fail=$$((fail+1)); echo "FAIL rv32ui-$$t  ($$out)"; \
-		fi; \
-	done; \
-	echo ""; echo "$$pass passed, $$fail failed, `echo $(RVTESTS) | wc -w | tr -d ' '` total"; \
-	[ $$fail -eq 0 ]
-
-# The same test bodies against the suite's *stock* `p` environment, which
-# reports results through an ECALL trap handler and the `tohost` location
-# rather than through this project's MMIO registers. It therefore exercises
-# mtvec/mepc/mcause/ECALL/MRET on every single test.
-RVTEST_P_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
-                  -Itests/riscv-tests/env/p -Itests/riscv-tests/env \
-                  -Itests/riscv-tests/isa/macros/scalar \
-                  -T tests/riscv-tests-env/link-p.ld
-
-RVTESTS_P_ELF := $(addprefix build/riscv-tests-p/,$(addsuffix .elf,$(RVTESTS)))
-
-build/riscv-tests-p/%.elf: $(RVTESTS_DIR)/%.S tests/riscv-tests-env/link-p.ld
-	mkdir -p $(dir $@)
-	$(CC) $(RVTEST_P_FLAGS) -o $@ $<
-
-riscv-tests-p: $(RVTESTS_P_ELF)
-
-run-riscv-tests-p-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-p
-	@pass=0; fail=0; \
-	for t in $(RVTESTS); do \
-		d=$(HEX)/riscv-tests-p/$$t; \
-		/bin/bash tools/elftohex.sh build/riscv-tests-p/$$t.elf $$d >/dev/null 2>&1; \
-		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
-		out=`echo "$$raw" | grep -oE 'TOHOST=[0-9]+' | head -1`; \
-		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
-		if [ "$$out" = "TOHOST=1" ]; then \
-			pass=$$((pass+1)); echo "PASS rv32ui-p-$$t  finish=$$cyc"; \
-		else \
-			fail=$$((fail+1)); echo "FAIL rv32ui-p-$$t  ($$out)"; \
-		fi; \
-	done; \
-	echo ""; echo "$$pass passed, $$fail failed, `echo $(RVTESTS) | wc -w | tr -d ' '` total"; \
-	[ $$fail -eq 0 ]
+	$(call run-rvtests,rv32ui,$(RVTESTS),riscv-tests)
 
 # --------------------------------------------------------------------
 # Programs that run from SDRAM, linked against newlib.
@@ -648,34 +626,16 @@ RVTESTS_M_DIR := tests/riscv-tests/isa/rv32um
 RVTESTS_M     := $(basename $(notdir $(wildcard $(RVTESTS_M_DIR)/*.S)))
 RVTESTS_M_ELF := $(addprefix build/riscv-tests-m/,$(addsuffix .elf,$(RVTESTS_M)))
 
-RVTEST_M_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
-                  -Itests/riscv-tests-env -Itests/riscv-tests/isa/macros/scalar \
-                  -T tests/riscv-tests-env/link.ld
-
 .PHONY: riscv-tests-m run-riscv-tests-m-iverilog
 
-build/riscv-tests-m/%.elf: $(RVTESTS_M_DIR)/%.S tests/riscv-tests-env/riscv_test.h
+build/riscv-tests-m/%.elf: $(RVTESTS_M_DIR)/%.S $(RVTEST_LD)
 	mkdir -p $(dir $@)
-	$(CC) $(RVTEST_M_FLAGS) -o $@ $<
+	$(CC) $(RVTEST_FLAGS) -o $@ $<
 
 riscv-tests-m: $(RVTESTS_M_ELF)
 
 run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
-	@pass=0; fail=0; \
-	for t in $(RVTESTS_M); do \
-		d=$(HEX)/riscv-tests-m/$$t; \
-		/bin/bash tools/elftohex.sh build/riscv-tests-m/$$t.elf $$d >/dev/null 2>&1; \
-		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
-		out=`echo "$$raw" | grep -E '^(PASS|FAIL)'`; \
-		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
-		if [ "$$out" = "PASS" ]; then \
-			pass=$$((pass+1)); echo "PASS rv32um-$$t  finish=$$cyc"; \
-		else \
-			fail=$$((fail+1)); echo "FAIL rv32um-$$t  ($$out)"; \
-		fi; \
-	done; \
-	echo ""; echo "$$pass passed, $$fail failed, `echo $(RVTESTS_M) | wc -w | tr -d ' '` total"; \
-	[ $$fail -eq 0 ]
+	$(call run-rvtests,rv32um,$(RVTESTS_M),riscv-tests-m)
 
 # --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from
