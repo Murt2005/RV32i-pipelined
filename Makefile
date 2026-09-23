@@ -493,24 +493,6 @@ build/doom/Vtop: $(RTL_CORE) sim/doom_sim.cpp
 	$(MAKE) -C build/doom -f Vtop.mk -j$(DOOM_JOBS) \
 		OPT_FAST="-O3 $(DOOM_NATIVE)" OPT_GLOBAL="-O2"
 
-# Frames come out as PPM because the harness needs no library to write it.
-# Nothing on macOS opens PPM, so this converts them.
-.PHONY: doom-png doom-gif
-doom-png:
-	@python3 tools/ppm_to_png.py build/doom/*.ppm
-
-# A couple of hundred stills is a film, not a flipbook. GIF because Doom's
-# output is already 8-bit paletted, so the frames go in without being requantised
-# -- and because it needs no encoder installed.
-#   make doom-gif DOOM_GIF_DELAY=5   slower playback (hundredths of a second)
-#   make doom-gif DOOM_GIF_SCALE=1   no pixel doubling
-DOOM_GIF       ?= build/doom/doom.gif
-DOOM_GIF_DELAY ?= 3
-DOOM_GIF_SCALE ?= 2
-doom-gif:
-	@python3 tools/frames_to_gif.py $(DOOM_GIF) build/doom/frame*.ppm \
-		--delay=$(DOOM_GIF_DELAY) --scale=$(DOOM_GIF_SCALE)
-
 # DOOM_KEYS points the harness at a scripted input sequence; unset means Doom
 # gets no input at all and sits on the title screen before starting its demo.
 DOOM_KEYS ?= $(DOOM_DIR)/keys.txt
@@ -521,14 +503,11 @@ DOOM_STALL   ?= 0
 
 doom-sim: build/doom/Vtop doom
 	@mkdir -p build/doom
-	@# Clear old captures first. Without this a shorter run leaves the tail of a
-	@# longer one behind, and doom-png converts those too -- so the frames you
-	@# end up looking at are a mix of this run and whatever ran before it.
-	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
+	@# Clear old captures, so a shorter run doesn't leave frames from a longer one
+	@rm -f build/doom/frame*.ppm build/doom/frame*.idx
 	DOOM_KEYS=$(DOOM_KEYS) RV32_MEM_LATENCY=$(DOOM_LATENCY) \
 	RV32_STALL_RATE=$(DOOM_STALL) ./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
 		$(DOOM_DIR)/doom1.wad $(DOOM_OUT)/doom.boot.bin $(DOOM_FRAMES)
-	@$(MAKE) --no-print-directory doom-png
 
 DOOM_FRAMES ?= 2
 
@@ -589,10 +568,9 @@ doom-snapshot: $(DOOM_SNAP)
 # renderer draws to /dev/tty instead, which is the terminal regardless of where
 # stdout has been pointed.
 #
-# Frames still land in build/doom as they are drawn, so a session leaves a
-# record; doom-gif turns it into something watchable afterwards.
+# Frames still land in build/doom as they are drawn
 doom-live: $(DOOM_SNAP) | build/doom/Vtop
-	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
+	@rm -f build/doom/frame*.ppm build/doom/frame*.idx
 	@printf '  arrows/WASD move   , . strafe   space use   f fire\n'
 	@printf '  enter select   esc menu   tab map   y yes   q quit\n'
 	@printf '  text output goes to build/doom/doom.log\n\n'
@@ -611,7 +589,7 @@ DOOM_CAPTURE ?= 1
 # Watch a scripted run go past in the terminal instead of playing it.
 .PHONY: doom-watch
 doom-watch: $(DOOM_SNAP) | build/doom/Vtop
-	@rm -f build/doom/frame*.ppm build/doom/frame*.idx build/doom/frame*.png
+	@rm -f build/doom/frame*.ppm build/doom/frame*.idx
 	@DOOM_KEYS=$(DOOM_KEYS) DOOM_TUI=1 DOOM_LOAD=$(DOOM_SNAP) \
 	RV32_MEM_LATENCY=$(DOOM_LATENCY) RV32_STALL_RATE=$(DOOM_STALL) \
 	./build/doom/Vtop $(DOOM_OUT)/doom.sdram.bin \
