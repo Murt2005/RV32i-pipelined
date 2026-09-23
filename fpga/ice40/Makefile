@@ -1,20 +1,12 @@
-# ---------------------------------------------------------------------------
-# pico2-ice gateware build: sv2v -> yosys -> nextpnr-ice40 -> icepack -> dfu-util
-#
-# CLK_FREQ MUST equal the frequency the firmware passes to ice_fpga_init().
-# The UART divisor is a synthesis-time constant, so a mismatch garbles bytes
-# rather than producing silence. 12 MHz is the crystal frequency exactly, so
-# ice_fpga_init() passes XOSC straight through with divisor 1, and 1 Mbaud is an
-# exact /12 of it. If you change one, change the other and reflash both images.
-# ---------------------------------------------------------------------------
+# pico2-ice build: sv2v -> yosys -> nextpnr -> icepack -> dfu-util.
+# CLK_FREQ must match the firmware's ice_fpga_init()
 
 TOP        := rv32_top
 PCF        := $(TOP).pcf
 ROOT       := ../..
 RTL        := $(ROOT)/rtl
 
-# Identifies exactly which RTL this bitstream was built from, so the host can
-# refuse to talk to a stale one. The file list is shared with rv32_host.py.
+# Hash of the RTL, so the host can spot a stale bitstream
 BUILD_ID   := $(shell cat $$(cat rtl-sources.txt) | shasum -a 256 | cut -c1-8)
 
 CLK_FREQ   ?= 12000000
@@ -22,22 +14,14 @@ BAUD_RATE  ?= 1000000
 
 BUILD      := build
 
-# yosys cannot parse this RTL directly: its Verilog frontend has no `return`
-# statement, no $bits(type_name), and does not resolve package typedefs used as
-# declaration types. sv2v lowers all of that to Verilog-2005.
+# yosys can't parse this SystemVerilog, so sv2v converts it first
 SV_SRC     := $(TOP).sv uart.sv memory_spram.sv \
               $(RTL)/core/cpu.sv $(RTL)/mem/memory_io.sv $(RTL)/core/base.sv \
               $(RTL)/core/system.sv $(RTL)/core/riscv.sv $(RTL)/core/riscv32_common.sv
 
 INC        := -I$(RTL)/core -I$(RTL)/mem -I.
 
-# The RTL carries simulation-only protocol checkers behind `ifndef SYNTHESIS.
-# Nothing defines it for us -- sv2v and yosys both leave it undefined -- so
-# without this the checkers' state and comparators are synthesised into a design
-# that is already at 93% LC.
-# ext_m_disable: the UP5K cannot hold the M extension. A combinational 32x32
-# multiplier takes this design from 4916 to 8019 LUT4 against a 5280 budget, so
-# the board that this gateware targets builds the base ISA, as it always has.
+# SYNTHESIS drops the sim-only checkers. The UP5K has no room for the M extension
 DEFS       := -DSYNTHESIS -Dext_m_disable
 
 DFU_VID_PID := 1209:b1c0
@@ -46,12 +30,10 @@ DFU_VID_PID := 1209:b1c0
 
 all: $(BUILD)/$(TOP).bin
 
-# ---- 1. SystemVerilog -> Verilog-2005 -------------------------------------
 $(BUILD)/$(TOP).v: $(SV_SRC)
 	@mkdir -p $(BUILD)
 	sv2v $(INC) $(DEFS) --write=$@ $(TOP).sv
 
-# ---- 2. synthesis ---------------------------------------------------------
 $(BUILD)/$(TOP).json: $(BUILD)/$(TOP).v
 	yosys -q -p "read_verilog $<; \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
@@ -59,23 +41,17 @@ $(BUILD)/$(TOP).json: $(BUILD)/$(TOP).v
 		chparam -set BUILD_ID 32'h$(BUILD_ID) $(TOP); \
 		synth_ice40 -top $(TOP) -abc9 -dff -json $@"
 
-# ---- 3. place and route ---------------------------------------------------
 $(BUILD)/$(TOP).asc: $(BUILD)/$(TOP).json $(PCF)
 	nextpnr-ice40 -q --up5k --package sg48 --freq $$(($(CLK_FREQ)/1000000)) \
 		--pcf $(PCF) --json $< --asc $@
 
-# ---- 4. bitstream ---------------------------------------------------------
 $(BUILD)/$(TOP).bin: $(BUILD)/$(TOP).asc
 	icepack $< $@
 
-# ---- 5. flash -------------------------------------------------------------
-# dfu-util prints "Device's firmware is corrupt" on every successful flash.
-# It is a false alarm: the SDK's DFU manifest callback reports the result of
-# ice_fpga_start(), which unconditionally returns 0 without polling CDONE.
+# dfu-util always says "firmware is corrupt" here. It's a false alarm
 prog: $(BUILD)/$(TOP).bin
 	dfu-util -d $(DFU_VID_PID) -a 0 -D $< -R
 
-# ---- diagnostics ----------------------------------------------------------
 stat: $(BUILD)/$(TOP).v
 	yosys -q -p "read_verilog $<; \
 		chparam -set CLK_FREQ $(CLK_FREQ) $(TOP); \
@@ -88,8 +64,7 @@ util: $(BUILD)/$(TOP).asc
 		--json $(BUILD)/$(TOP).json --asc /dev/null 2>&1 | \
 		grep -A20 "Device utilisation"
 
-# Some Homebrew icestorm installs cannot resolve -d up5k; fall back to the
-# chipdb file directly.
+# Falls back to the chipdb file when -d up5k isn't found
 time: $(BUILD)/$(TOP).asc
 	icetime -d up5k -c $$(($(CLK_FREQ)/1000000)) -t $< 2>/dev/null || \
 	icetime -C $$(brew --prefix icestorm)/share/icestorm/chipdb/chipdb-5k.txt \
@@ -99,9 +74,6 @@ lint:
 	verilator --lint-only -Wall --top-module $(TOP) $(INC) \
 		$(TOP).sv uart.sv memory_spram.sv $(RTL)/core/cpu.sv 2>&1 | head -60
 
-# ---- board-level simulation ----------------------------------------------
-# Simulates the same RTL that gets synthesized, including a behavioural model
-# of the SPRAM hard block and a UART host model.
 sim:
 	$(MAKE) -C sim run
 

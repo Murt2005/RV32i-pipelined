@@ -1,13 +1,5 @@
-# Board-level simulation of rv32_top, driven over the real UART wire protocol.
-#
-#   make run                       -> runs tests/isa/add_sub
-#   make run TEST=hazards/load_use -> runs that test
-#   make run-all                   -> every test under tests/
-#
-# The hex images come from the normal build flow in the repo root, so this
-# runs exactly the same programs as the pure-simulation regression. They are
-# written to their own directory under build/ and the testbench runs from there,
-# since it reads them from its working directory.
+# Board-level simulation over the UART protocol.
+# make run TEST=hazards/load_use runs one test; make run-all runs them all
 
 ROOT   := ../../..
 IVERILOG ?= iverilog
@@ -27,7 +19,6 @@ $(SIM): tb_rv32_top.sv ../rv32_top.sv ../uart.sv ../memory_spram.sv \
         sb_spram256ka.sv $(wildcard $(ROOT)/rtl/core/*.sv) $(ROOT)/rtl/mem/memory_io.sv
 	$(IVERILOG) -g2012 $(INC) -o $@ tb_rv32_top.sv
 
-# Build the test image in the repo root, then run it here against the board top.
 run: $(SIM)
 	$(MAKE) -C $(ROOT) build/tests/$(TEST).elf build/tools/dumphex
 	/bin/bash $(ROOT)/tools/elftohex.sh $(ROOT)/build/tests/$(TEST).elf $(HEX)

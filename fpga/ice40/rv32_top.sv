@@ -7,55 +7,21 @@
 `include "uart.sv"
 `include "memory_spram.sv"
 
-// ---------------------------------------------------------------------------
-// pico2-ice board top level for the RV32I pipeline.
-//
-// Everything board-specific lives here; `core` (cpu.sv) is untouched apart
-// from the generic `stall` input. The contract between them is the existing
-// memory_io request/response pair plus one byte-stream UART PHY.
-//
-// What this adds that a simulation-only design never needed:
-//   1. A power-on reset. reset_n is a plain pull-up on this board, so it reads
-//      high from the instant the FPGA configures and every `if (reset)` branch
-//      would otherwise never fire (gotcha G1).
-//   2. Backpressure on the putchar MMIO register. $write is instantaneous in
-//      simulation; a 1 Mbaud UART is not, and the pipeline has no way to
-//      express "not ready" on the memory_io interface, so the core is frozen
-//      via `stall` while the transmit queue is full.
-//   3. A host loader, because SPRAM cannot be initialised at configuration
-//      time. The host writes the program image over the same UART, then
-//      releases the core. One bitstream runs any program.
-//
-// Wire protocol (host -> FPGA), little endian:
-//   0x00        NOP                        (so idle filler is harmless)
-//   'P' 0x50    ping        -> 'p', VERSION
-//   'Z' 0x5A    zero memory -> 'z'  (clears both 64 KiB memories)
-//   'W' 0x57    write       -> addr[4], len[2], len data bytes, then 'w'
-//   'R' 0x52    read        -> addr[4], len[2], then 'r' and len data bytes
-//   'G' 0x47    go          -> 'g', then raw program output until 0x04 (EOT)
-//   'H' 0x48    halt        -> 'h'
-//   'S' 0x53    status      -> 's', {6'b0, halted, running}
-//   'T' 0x54    stall rate  -> rate[1], then 't'  (0 disables; see below)
-//   'B' 0x42    build id    -> 'b', 4 bytes LE identifying the RTL that was built
-// ---------------------------------------------------------------------------
+// pico2-ice top level: power-on reset, UART program loader and the RV32I core
 
 module rv32_top #(
-    parameter int CLK_FREQ  = 12000000,     // must equal the firmware's ice_fpga_init()
-    parameter int BAUD_RATE = 1000000,      // exact /12 of 12 MHz -> zero baud error
+    parameter int CLK_FREQ  = 12000000,     // must match the firmware's ice_fpga_init()
+    parameter int BAUD_RATE = 1000000,
     parameter [31:0] RESET_PC = 32'h0001_0000,
-    // Hash of the RTL sources, set by the Makefile. The protocol VERSION only
-    // tracks the wire protocol, so a bitstream built from older core RTL still
-    // answers a ping happily -- which already cost one debugging session
-    // chasing a "hardware bug" that was really a stale bitstream.
-    parameter [31:0] BUILD_ID = 32'h0000_0000
+    parameter [31:0] BUILD_ID = 32'h0000_0000  // hash of the RTL, set by the Makefile
 ) (
-    input  logic clk,          // pin 35, G0 global buffer, from RP2350 GPOUT0
-    input  logic reset_n,      // pin 10, ICE_PB push button, active low
-    input  logic rx_pin,       // pin 9,  from RP2350 GPIO28 (uart0 TX)
-    output logic tx_pin,       // pin 11, to   RP2350 GPIO29 (uart0 RX)
-    output logic led_r_n,      // pin 41, active low
-    output logic led_g_n,      // pin 39, active low
-    output logic led_b_n       // pin 40, active low
+    input  logic clk,
+    input  logic reset_n,
+    input  logic rx_pin,
+    output logic tx_pin,
+    output logic led_r_n,
+    output logic led_g_n,
+    output logic led_b_n
 );
 
     localparam int CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;
@@ -65,13 +31,10 @@ module rv32_top #(
     localparam [31:0] MMIO_PUTCHAR = 32'h0002_FFF8;
     localparam [31:0] MMIO_HALT    = 32'h0002_FFFC;
     localparam [31:0] MMIO_CYCLES  = 32'h0002_FFF0;
-    // riscv-tests `p` environment reports results here and then spins.
     localparam [31:0] MMIO_TOHOST  = 32'h0002_FFC0;
     localparam [31:0] MMIO_RETIRED = 32'h0002_FFF4;
 
-    // -----------------------------------------------------------------------
-    // Power-on reset. Do this first; it is not optional on this board.
-    // -----------------------------------------------------------------------
+    // reset_n is only a pull-up on this board, so reset has to come from here
     logic [7:0] por_ctr  = 8'h00;
     logic       por_done = 1'b0;
 
@@ -84,11 +47,8 @@ module rv32_top #(
     end
 
     logic rst;
-    assign rst = ~reset_n | ~por_done;      // active-high internal reset
+    assign rst = ~reset_n | ~por_done;
 
-    // -----------------------------------------------------------------------
-    // UART PHY
-    // -----------------------------------------------------------------------
     logic [7:0] rx_data;
     logic       rx_valid, rx_err;
     logic [7:0] tx_data;
@@ -104,18 +64,10 @@ module rv32_top #(
         .data(tx_data), .valid(tx_valid), .busy(tx_busy), .tx(tx_pin)
     );
 
-    // -----------------------------------------------------------------------
-    // Transmit queue.
-    //
-    // The stall must come from the queue's *registered* occupancy, never from
-    // the memory request itself: the core suppresses its memory request when
-    // the memory stage is not advancing, so stalling on the live request would
-    // close a combinational loop (stall -> no request -> no stall -> ...).
-    // -----------------------------------------------------------------------
+    // Stall on the queue's registered count, not the live request, or the two form a loop
     localparam int TXQ_DEPTH = 16;
     localparam logic [4:0] TXQ_FULL_LVL  = 5'(TXQ_DEPTH);
-    // Once the stall asserts, at most one further store can still be sitting in
-    // EX/MEM and issue. Two free slots is therefore already generous.
+    // One more store can still issue after the stall asserts
     localparam logic [4:0] TXQ_STALL_LVL = 5'(TXQ_DEPTH - 2);
 
     logic [7:0] txq [0:TXQ_DEPTH-1];
@@ -153,29 +105,16 @@ module rv32_top #(
         end
     end
 
-    // -----------------------------------------------------------------------
-    // Core
-    // -----------------------------------------------------------------------
-    logic cpu_run;          // released by 'G', cleared by 'H' or the halt MMIO
-    logic cpu_halted;       // program wrote the halt address
+    logic cpu_run;
+    logic cpu_halted;
     logic cpu_reset;
     logic cpu_stall;
 
-    // Stall injection. `stall` is otherwise only ever driven by transmit-queue
-    // backpressure, which is a low-entropy pattern tied to how often the
-    // program prints -- so the stall/redirect interaction in the pipeline
-    // barely gets exercised, and that is precisely where a latent fetch bug was
-    // already found. Driving it from an LFSR instead lets the differential
-    // tester hammer that interaction.
-    logic [7:0]  stall_rate;       // 0 disables; higher stalls more often
+    // Random stalls, set by 'T', to test the pipeline's stall handling on hardware
+    logic [7:0]  stall_rate;
     logic [15:0] lfsr;
 
-    // Memory + register clear. SPRAM and the block-RAM register file both keep
-    // their contents across runs, while the simulator's memory.sv and register
-    // file are zeroed by `initial` blocks. Without this the two do not start
-    // from the same state, and a test that asserts a location the program never
-    // writes passes in simulation and fails on hardware for a reason that has
-    // nothing to do with the pipeline.
+    // 'Z' clears memory and registers, so hardware starts from the same state as simulation
     logic        zeroing;
 
     assign cpu_reset = rst | ~cpu_run;
@@ -184,8 +123,7 @@ module rv32_top #(
     memory_io_rsp inst_rsp,     data_rsp, data_rsp_raw;
     logic         retired;
 
-    // Performance counters, readable as memory-mapped words. Counted only while
-    // the core is running, so a figure is not diluted by time spent stopped.
+    // Performance counters, counted only while the core runs
     logic [31:0] perf_cycles, perf_retired;
     logic [31:0] perf_cycles_q, perf_retired_q;
     logic        perf_sel_cycles, perf_sel_retired;
@@ -195,9 +133,6 @@ module rv32_top #(
         .clk(clk),
         .reset(cpu_reset),
         .stall(cpu_stall),
-        // 'Z' means "restore the state a fresh simulation would start from",
-        // which is memory *and* registers. The clear takes 32 cycles and the
-        // memory pass takes 16384, so it is always finished first.
         .clear_regs(zeroing),
         .reset_pc(RESET_PC),
         .inst_mem_req(cpu_inst_req),
@@ -226,16 +161,14 @@ module rv32_top #(
         perf_retired_q     <= perf_retired;
     end
 
-    // Muxed over the memory's own response, one cycle later to match its latency.
+    // One cycle late, to line up with the memory's response
     always_comb begin
         data_rsp = data_rsp_raw;
         if (perf_sel_cycles_q)       data_rsp.data = perf_cycles_q;
         else if (perf_sel_retired_q) data_rsp.data = perf_retired_q;
     end
 
-    // Free-running Galois LFSR, reseeded on every 'G' so that a given program
-    // at a given rate replays identically -- shrinking a failing case depends
-    // on that.
+    // Reseeded on every 'G', so a run is repeatable
     always_ff @(posedge clk) begin
         if (rst || !cpu_run)
             lfsr <= 16'hACE1;
@@ -244,17 +177,11 @@ module rv32_top #(
     end
 
     logic stall_inject;
-    // rate 0 never fires; rate 255 still leaves lfsr[7:0] == 255 un-stalled, so
-    // the core always makes forward progress and cannot be wedged.
+    // Even rate 255 leaves one value unstalled, so the core always makes progress
     assign stall_inject = (lfsr[7:0] < stall_rate);
 
-    // Extra stall cycles are always safe: the queue-backpressure term below is
-    // what guarantees no byte is dropped, and stalling *more* never breaks it.
     assign cpu_stall = (txq_count >= TXQ_STALL_LVL) | stall_inject;
 
-    // -----------------------------------------------------------------------
-    // MMIO decode (snoops the data request, exactly like the simulation top)
-    // -----------------------------------------------------------------------
     logic mmio_putchar, mmio_halt;
 
     assign mmio_putchar = cpu_run & cpu_data_req.valid
@@ -266,9 +193,6 @@ module rv32_top #(
                         |  (cpu_data_req.addr == MMIO_TOHOST))
                         & is_any_byte(cpu_data_req.do_write);
 
-    // -----------------------------------------------------------------------
-    // Host loader / command FSM
-    // -----------------------------------------------------------------------
     typedef enum logic [3:0] {
         S_IDLE   = 4'd0,
         S_ADDR   = 4'd1,
@@ -277,13 +201,13 @@ module rv32_top #(
         S_RESP1  = 4'd4,
         S_RESP2  = 4'd5,
         S_ZERO   = 4'd6,
-        S_RD_ACK = 4'd7,    // emit 'r' before the payload so the host can sync
-        S_RD_REQ = 4'd8,    // issue the word read
-        S_RD_WAIT= 4'd9,    // memory response lands the next cycle
-        S_RD_PUSH= 4'd10,   // hand one byte to the transmit queue
-        S_TRATE  = 4'd11,   // collect the stall-injection rate byte
-        S_BID_ACK= 4'd12,   // emit 'b'
-        S_BID    = 4'd13    // then the four build-id bytes
+        S_RD_ACK = 4'd7,
+        S_RD_REQ = 4'd8,
+        S_RD_WAIT= 4'd9,
+        S_RD_PUSH= 4'd10,
+        S_TRATE  = 4'd11,
+        S_BID_ACK= 4'd12,
+        S_BID    = 4'd13
     } ldr_state_t;
 
     ldr_state_t   state;
@@ -297,26 +221,18 @@ module rv32_top #(
     logic [1:0]   bid_idx;
     logic [13:0]  zero_addr;
 
-    // Memory read-back. Needed to compare architectural state against a
-    // reference model; the protocol was write-only before.
     logic         cmd_is_read;
     logic         rd_from_inst;
     logic [31:0]  rd_word;
     logic         rd_ready;
 
-
-    // Loader-issued memory write, pulsed for a single cycle.
     memory_io_req ldr_req;
     logic         ldr_to_inst;
     logic         resp_ready;
 
     assign ldr_to_inst = (ldr_req.addr[19:16] == 4'h1);
 
-    // -----------------------------------------------------------------------
-    // Transmit queue arbiter, combinational so occupancy -- and therefore the
-    // stall -- tracks without lag. Program output wins; the halt sentinel and
-    // command responses only ever contend while the core is stopped.
-    // -----------------------------------------------------------------------
+    // Program output has priority; loader replies only happen while the core is stopped
     always_comb begin
         txq_push   = 1'b0;
         txq_din    = 8'h00;
@@ -343,10 +259,9 @@ module rv32_top #(
             rd_ready = 1'b1;
         end else if (!txq_full && state == S_RD_ACK) begin
             txq_push = 1'b1;
-            txq_din  = 8'h72;                       // 'r', ahead of the payload
+            txq_din  = 8'h72;                       // 'r'
             rd_ready = 1'b1;
         end else if (!txq_full && state == S_RD_PUSH) begin
-            // Select the byte lane the way the memory lays a word out.
             txq_push = 1'b1;
             txq_din  = rd_word[{load_addr[1:0], 3'b000} +: 8];
             rd_ready = 1'b1;
@@ -375,12 +290,11 @@ module rv32_top #(
             bid_idx       <= 2'd0;
             ldr_req       <= memory_io_no_req;
         end else begin
-            ldr_req.valid <= 1'b0;      // single-cycle pulse
+            ldr_req.valid <= 1'b0;
 
             if (rx_err)
                 rx_err_count <= rx_err_count + 8'd1;
 
-            // ---- the program asked to halt ----
             if (mmio_halt) begin
                 cpu_run      <= 1'b0;
                 cpu_halted   <= 1'b1;
@@ -389,7 +303,6 @@ module rv32_top #(
                 halt_pending <= 1'b0;
             end
 
-            // ---- command FSM ----
             case (state)
                 S_IDLE: begin
                     if (rx_valid) begin
@@ -463,7 +376,7 @@ module rv32_top #(
                         end else begin
                             load_len[15:8] <= rx_data;
                             byte_idx       <= 2'd0;
-                            // A zero-length transfer is a no-op, ack only.
+                            // Zero length: just ack
                             if ({rx_data, load_len[7:0]} == 16'd0) begin
                                 resp0 <= cmd_is_read ? 8'h72 : 8'h77;
                                 resp_two <= 1'b0;
@@ -479,9 +392,6 @@ module rv32_top #(
 
                 S_DATA: begin
                     if (rx_valid) begin
-                        // One byte per memory transaction. At 1 Mbaud a byte
-                        // arrives every CLKS_PER_BIT*10 clocks, so a
-                        // single-cycle write has ample time.
                         ldr_req.valid    <= 1'b1;
                         ldr_req.addr     <= load_addr;
                         ldr_req.do_read  <= 4'b0000;
@@ -499,8 +409,6 @@ module rv32_top #(
                 end
 
                 S_ZERO: begin
-                    // One word per cycle into both memories at once:
-                    // 16384 cycles, about 2.7 ms at 6 MHz.
                     zero_addr <= zero_addr + 14'd1;
                     if (zero_addr == 14'h3FFF) begin
                         zeroing <= 1'b0;
@@ -509,8 +417,6 @@ module rv32_top #(
                     end
                 end
 
-                // 'r' goes out first so the host can resynchronise before the
-                // payload, then one byte per word read.
                 S_RD_ACK: begin
                     if (rd_ready)
                         state <= S_RD_REQ;
@@ -527,7 +433,6 @@ module rv32_top #(
                 end
 
                 S_RD_WAIT: begin
-                    // memory_spram answers exactly one cycle after the request.
                     if (rd_from_inst ? inst_rsp.valid : data_rsp.valid) begin
                         rd_word <= rd_from_inst ? inst_rsp.data : data_rsp.data;
                         state   <= S_RD_PUSH;
@@ -579,9 +484,7 @@ module rv32_top #(
         end
     end
 
-    // -----------------------------------------------------------------------
-    // Memory: the loader owns the buses while the core is held in reset.
-    // -----------------------------------------------------------------------
+    // The loader drives the memories while the core is stopped
     memory_io_req inst_req_mux, data_req_mux;
 
     memory_io_req zero_req;
@@ -597,7 +500,6 @@ module rv32_top #(
             inst_req_mux = cpu_inst_req;
             data_req_mux = cpu_data_req;
         end else if (zeroing) begin
-            // Both memories are cleared in the same pass.
             inst_req_mux = zero_req;
             data_req_mux = zero_req;
         end else begin
@@ -618,11 +520,7 @@ module rv32_top #(
         .clk(clk), .reset(rst), .req(data_req_mux), .rsp(data_rsp_raw)
     );
 
-    // -----------------------------------------------------------------------
-    // Status LEDs (active low). Blue blinks whenever the external clock is
-    // alive, which is the fastest way to tell clock delivery from a dead
-    // bitstream during bring-up.
-    // -----------------------------------------------------------------------
+    // Blue blinks while the clock runs, green while the core runs, red once halted
     logic [22:0] heartbeat;
     always_ff @(posedge clk) begin
         if (rst)

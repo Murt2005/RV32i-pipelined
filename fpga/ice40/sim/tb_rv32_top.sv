@@ -3,32 +3,22 @@
 `include "sb_spram256ka.sv"
 `include "rv32_top.sv"
 
-// ---------------------------------------------------------------------------
-// Board-level testbench: drives rv32_top through the same UART wire protocol
-// the host tool uses, with the same RTL that gets synthesized (including a
-// behavioural SPRAM model).
-//
-// The single most important thing this proves is that the design works with
-// reset_n tied HIGH for all time. That is what the board actually does -- the
-// reset pin is a plain pull-up, so it reads idle-high from the instant the
-// FPGA configures. Every existing testbench pulses reset at t=0, which makes
-// a missing power-on reset structurally invisible to them (gotcha G1).
-// ---------------------------------------------------------------------------
+// Board-level testbench: drives rv32_top over UART the way the host tool does.
+// reset_n is never pulsed, as on the real board
 
 module tb_rv32_top();
 
-    // 6 MHz core. Baud is raised relative to the real build purely to keep the
-    // simulation short; CLKS_PER_BIT is what actually matters and stays sane.
+    // Faster baud than the real build, to keep the simulation short
     localparam int CLK_FREQ     = 6000000;
     localparam int BAUD_RATE    = 750000;
-    localparam int CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;   // 8
+    localparam int CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;
 
     localparam real CLK_PERIOD = 1000.0e3 / CLK_FREQ;     // ns
     localparam real BIT_TIME   = CLK_PERIOD * CLKS_PER_BIT;
 
     logic clk = 0;
-    logic reset_n = 1'b1;      // deliberately never pulsed
-    logic host_to_fpga = 1'b1; // idle high
+    logic reset_n = 1'b1;
+    logic host_to_fpga = 1'b1;
     logic fpga_to_host;
     logic led_r_n, led_g_n, led_b_n;
 
@@ -47,7 +37,6 @@ module tb_rv32_top();
         .led_b_n(led_b_n)
     );
 
-    // ---------------- host UART model ----------------
     task automatic send_byte(input logic [7:0] b);
         integer i;
         begin
@@ -85,10 +74,8 @@ module tb_rv32_top();
         end
     endtask
 
-    // ---------------- program image ----------------
-    // Read the byte-lane hex files the normal build flow already produces.
     localparam int MEM_WORDS = 16384;
-    // Separate 1-D arrays: iverilog cannot $readmemh into a slice of a 2-D array.
+    // Separate 1-D arrays: iverilog cannot $readmemh into a slice of a 2-D array
     reg [7:0] code0 [0:MEM_WORDS-1]; reg [7:0] code1 [0:MEM_WORDS-1];
     reg [7:0] code2 [0:MEM_WORDS-1]; reg [7:0] code3 [0:MEM_WORDS-1];
     reg [7:0] data0 [0:MEM_WORDS-1]; reg [7:0] data1 [0:MEM_WORDS-1];
@@ -132,8 +119,7 @@ module tb_rv32_top();
             $readmemh("data2.hex", data2);
             $readmemh("data3.hex", data3);
 
-            // Only send up to the last non-zero byte; the images are 64 KiB of
-            // mostly zeros and SPRAM already powers up cleared.
+            // Only send up to the last non-zero byte
             code_bytes = 0;
             data_bytes = 0;
             for (i = 0; i < MEM_WORDS*4; i = i + 1) begin
@@ -163,7 +149,6 @@ module tb_rv32_top();
         end
     endtask
 
-    // ---------------- main ----------------
     logic [7:0] b;
     integer     nout;
     string      out_line;
@@ -177,11 +162,9 @@ module tb_rv32_top();
         load_images();
         $display("--- image: %0d code bytes, %0d data bytes ---", code_bytes, data_bytes);
 
-        // Let the internal power-on reset counter run out. Nothing external
-        // ever asserts reset.
+        // Wait for the internal power-on reset
         #(CLK_PERIOD * 600);
 
-        // Rung 1: does the command interface answer at all?
         send_byte(8'h00);                        // NOP, must be ignored
         send_byte(8'h50);                        // 'P'
         expect_byte(8'h70, "ping reply");
@@ -196,8 +179,7 @@ module tb_rv32_top();
         write_region(32'h0002_0000, data_bytes, 0);
         $display("LOAD ok");
 
-        // Read back the first 8 bytes of the program image and check they
-        // match what was written, exercising the 'R' path before the run.
+        // Read back the first 8 bytes of code
         send_byte(8'h52);                        // 'R'
         send_byte(8'h00); send_byte(8'h00); send_byte(8'h01); send_byte(8'h00);
         send_byte(8'h08); send_byte(8'h00);
@@ -213,8 +195,7 @@ module tb_rv32_top();
         end
         $display("READBACK ok");
 
-        // Exercise the stall-injection knob: stall roughly a third of cycles
-        // for the whole run. Output must be identical, just slower.
+        // Stall about a third of cycles; the output must not change
         send_byte(8'h54); send_byte(8'd85);      // 'T', rate
         expect_byte(8'h74, "stall rate ack");
         $display("STALLRATE ok");
@@ -222,7 +203,7 @@ module tb_rv32_top();
         send_byte(8'h47);                        // 'G'
         expect_byte(8'h67, "go reply");
 
-        // Collect program output until the halt sentinel.
+        // Collect program output until the halt sentinel
         nout = 0;
         out_line = "";
         forever begin
@@ -243,7 +224,6 @@ module tb_rv32_top();
         end
     end
 
-    // ---- debug instrumentation ----
     integer nputc = 0;
     always @(posedge clk) begin
         if ($test$plusargs("dbg")) begin
