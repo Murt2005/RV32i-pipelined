@@ -22,9 +22,14 @@ LD=$(RISCV_PREFIX)-ld
 # regression suite is hand-written assembly.
 CSTD=-std=gnu17
 
-SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
+# The pico2-ice bitstream has no M extension, so software for the board is built
+# rv32i, with multiply and divide coming from the rv32i libgcc
+BOARD_MARCH := rv32i_zicsr
+BOARD_LIBGCC = $(shell $(CC) -march=$(BOARD_MARCH) -mabi=$(MABI) -print-libgcc-file-name)
+
+SSFLAGS=-march=$(BOARD_MARCH) -mabi=$(MABI)
 LDFLAGS=-m $(LDEMUL) --script sw/common/link.ld
-LDPOSTFLAGS= -Lsw/libmc -lmc -L$(RISCV_LIB) -lgcc
+LDPOSTFLAGS= -Lsw/libmc -lmc $(BOARD_LIBGCC)
 TOOLS=build/tools/dumphex
 LIBS=sw/libmc/libmc.a
 
@@ -66,17 +71,13 @@ build/%.elf: build/%.o sw/common/link.ld
 	$(LD) $(LDFLAGS) -o $@ $<
 
 
-# Rebuilt when its sources *or the ISA* change. It had no prerequisites at all,
-# so it was only ever built when missing -- and `make clean` does not remove it.
-# Switching MARCH therefore left a stale rv32i archive to be linked against
-# rv32im objects, which silently reintroduced libgcc's soft multiply and divide
-# into a build that has hardware for both.
+# Rebuilt when its sources or its ISA change, so a stale archive is never linked
 LIBMC_SRC := $(wildcard sw/libmc/*.c) $(wildcard sw/libmc/*.s) $(wildcard sw/libmc/*.h) \
-             sw/libmc/Makefile site-config.sh
+             sw/libmc/Makefile site-config.sh Makefile
 
 sw/libmc/libmc.a: $(LIBMC_SRC)
 	$(MAKE) -C sw/libmc clean
-	$(MAKE) -C sw/libmc
+	$(MAKE) -C sw/libmc MARCH=$(BOARD_MARCH)
 
 build/tools/dumphex: tools/dumphex.c
 	mkdir -p $(dir $@)
@@ -373,7 +374,7 @@ test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-ive
 # --------------------------------------------------------------------
 DHRY_DIR  := sw/bench/dhrystone
 DHRY_OUT  := build/sw/bench/dhrystone
-DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Isw/libmc -I$(DHRY_DIR) \
+DHRY_FLAGS := -march=$(BOARD_MARCH) -mabi=$(MABI) $(CSTD) -O2 -Isw/libmc -I$(DHRY_DIR) \
               -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
               -Wno-implicit-int -Wno-return-type
 DHRY_OBJS := $(DHRY_OUT)/crt0.o $(DHRY_OUT)/dhrystone.o \
