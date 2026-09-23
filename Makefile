@@ -313,10 +313,14 @@ sdram-progs: $(EXAMPLES_OUT)/hello.elf
 
 # The SDRAM image needs three regions rather than two, so it does not go through
 # elftohex.sh. hello needs about 1.5M cycles, well past the default watchdog.
+# hello runs for about 1.5M cycles, well past the default watchdog
+HELLO_TIMEOUT ?= 5000000
+
 run-sdram-hello: $(EXAMPLES_OUT)/hello.elf $(SIM_IVERILOG)
 	@mkdir -p $(HEX)/examples/hello
 	python3 tools/elf_to_sdram_hex.py $(EXAMPLES_OUT)/hello.elf $(HEX)/examples/hello
-	cd $(HEX)/examples/hello && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS)
+	cd $(HEX)/examples/hello && $(CURDIR)/$(SIM_IVERILOG) \
+		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(HELLO_TIMEOUT)
 
 # --------------------------------------------------------------------
 # Official riscv-tests rv32um suite (M extension).
