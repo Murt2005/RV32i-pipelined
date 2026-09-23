@@ -10,11 +10,11 @@ Typical use:
     # probe the link and report what answered
     python3 tools/rv32_host.py --probe
 
-    # run one test built by the repo's normal flow
-    python3 tools/rv32_host.py --elf build/tests/isa/add_sub.elf
+    # run one program and stream its output
+    python3 tools/rv32_host.py --elf build/sw/bench/ipc.elf
 
-    # run the whole regression against silicon and diff against simulation
-    python3 tools/rv32_host.py --regress
+    # run the rv32ui and rv32mi riscv-tests suites on the board
+    python3 tools/rv32_host.py --riscv-tests
 
 Port selection: both CDC ports report the same product string on macOS, so
 there is no reliable way to tell the bridged one from the log one. With no
@@ -64,6 +64,7 @@ CLK_HZ = 12_000_000    # must equal CLK_FREQ in fpga/ice40/Makefile
 
 TEXT_BASE = 0x00010000
 DATA_BASE = 0x00020000
+TOHOST    = 0x0002FFC0   # riscv-tests write their result here, then halt
 
 # The FPGA writes one byte per memory transaction and the UART paces it, but
 # keep frames modest so a stuck link fails fast rather than after 64 KiB.
@@ -407,43 +408,28 @@ def run_elf(board, elf, timeout=15.0, quiet=False):
     return out, halted
 
 
-def sim_output(stem, repo_root):
-    """Run the same test under iverilog and return its stdout for comparison."""
-    r = subprocess.run(["make", f"run-test-{stem.replace('/', '-')}-iverilog"],
-                       cwd=repo_root, capture_output=True, text=True)
-    lines = []
-    keep = False
-    for line in r.stdout.splitlines():
-        if line.startswith("==="):
-            keep = True
-        if keep and not line.startswith(("make", "cd ", "mkdir", "/bin/bash",
-                                         "./build", "WARNING", "VCD", "rm ")):
-            if "$finish called" in line:
-                break
-            lines.append(line)
-    return "\n".join(lines).strip()
-
-
 def do_riscv_tests(board, repo_root, timeout):
-    """Run the official rv32ui suite on hardware. Each test prints one line."""
-    elfs = sorted(glob.glob(os.path.join(repo_root, "build", "riscv-tests", "*.elf")))
+    """Run rv32ui and rv32mi on hardware, reading each result from tohost."""
+    suites = [("rv32ui", "riscv-tests"), ("rv32mi", "riscv-tests-mi")]
+    elfs = [(name, e) for name, d in suites
+            for e in sorted(glob.glob(os.path.join(repo_root, "build", d, "*.elf")))]
     if not elfs:
-        print("no ELFs in build/riscv-tests -- run `make riscv-tests` first",
+        print("no ELFs in build/ -- run `make riscv-tests riscv-tests-mi` first",
               file=sys.stderr)
         return 2
 
     npass = nfail = 0
-    for elf in elfs:
-        name = os.path.basename(elf)[:-4]
-        out, halted = run_elf(board, elf, timeout=timeout, quiet=True)
-        text = out.decode("utf-8", errors="replace").strip()
-        if halted and text == "PASS":
+    for suite, elf in elfs:
+        name = f"{suite}-{os.path.basename(elf)[:-4]}"
+        _, halted = run_elf(board, elf, timeout=timeout, quiet=True)
+        result = int.from_bytes(board.read_mem(TOHOST, 4), "little") if halted else None
+        if result == 1:
             npass += 1
-            print(f"PASS rv32ui-{name}")
+            print(f"PASS {name}")
         else:
             nfail += 1
-            detail = text if halted else f"no halt, got {text!r}"
-            print(f"FAIL rv32ui-{name}  ({detail})")
+            detail = "no halt" if result is None else f"test {result >> 1}"
+            print(f"FAIL {name}  ({detail})")
 
     print(f"\n{npass} passed, {nfail} failed, {len(elfs)} total")
     return 0 if nfail == 0 else 1
@@ -514,46 +500,6 @@ def do_dhrystone(board, repo_root, timeout):
     return 0
 
 
-def do_regress(board, repo_root, timeout):
-    stems = []
-    for sub in ("isa", "hazards"):
-        d = os.path.join(repo_root, "tests", sub)
-        for f in sorted(glob.glob(os.path.join(d, "*.s"))):
-            stems.append(f"{sub}/{os.path.splitext(os.path.basename(f))[0]}")
-
-    npass = nfail = 0
-    failures = []
-    for stem in stems:
-        elf = os.path.join(repo_root, "build", "tests", stem + ".elf")
-        if not os.path.exists(elf):
-            subprocess.run(["make", f"build/tests/{stem}.elf"],
-                           cwd=repo_root, capture_output=True)
-        if not os.path.exists(elf):
-            print(f"SKIP {stem} (no ELF)")
-            continue
-
-        hw_out, halted = run_elf(board, elf, timeout=timeout, quiet=True)
-        hw = hw_out.decode("utf-8", errors="replace").strip()
-        sim = sim_output(stem, repo_root)
-
-        ok = halted and hw == sim and "FAIL" not in hw
-        if ok:
-            npass += 1
-            print(f"PASS {stem}")
-        else:
-            nfail += 1
-            reason = ("no halt" if not halted
-                      else "FAIL in output" if "FAIL" in hw
-                      else "differs from simulation")
-            print(f"FAIL {stem}  ({reason})")
-            failures.append((stem, sim, hw))
-
-    print(f"\n{npass} passed, {nfail} failed, {len(stems)} total")
-    for stem, sim, hw in failures:
-        print(f"\n--- {stem} ---\n[sim]\n{sim}\n[hw]\n{hw}")
-    return 0 if nfail == 0 else 1
-
-
 def main():
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -562,10 +508,8 @@ def main():
     ap.add_argument("--port", help="serial port; autodetected if omitted")
     ap.add_argument("--elf", help="ELF to load and run")
     ap.add_argument("--probe", action="store_true", help="ping and report status")
-    ap.add_argument("--regress", action="store_true",
-                    help="run every test in tests/ and diff against simulation")
     ap.add_argument("--riscv-tests", action="store_true",
-                    help="run the official rv32ui suite from build/riscv-tests")
+                    help="run the rv32ui and rv32mi suites and check each tohost")
     ap.add_argument("--bench", metavar="ELF",
                     help="run a counter-sampling workload and report IPC")
     ap.add_argument("--dhrystone", action="store_true",
@@ -575,10 +519,9 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
-    if not (args.elf or args.probe or args.regress or args.riscv_tests
+    if not (args.elf or args.probe or args.riscv_tests
             or args.bench or args.dhrystone):
-        ap.error("give one of --elf, --probe, --regress, --riscv-tests, "
-                 "--bench or --dhrystone")
+        ap.error("give one of --elf, --probe, --riscv-tests, --bench or --dhrystone")
 
     try:
         board = open_board(args.port, verbose=args.verbose)
@@ -599,8 +542,6 @@ def main():
             return do_bench(board, args.bench, args.timeout)
         if args.riscv_tests:
             return do_riscv_tests(board, repo_root, args.timeout)
-        if args.regress:
-            return do_regress(board, repo_root, args.timeout)
     except Rv32Error as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
