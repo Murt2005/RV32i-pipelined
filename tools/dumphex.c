@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
         fclose(ifp);
 
     int true_size = amount;
-    while (data[true_size - 1] == 0 && true_size  > 0)
+    while (true_size > 0 && data[true_size - 1] == 0)
         --true_size;
 
     uint32_t *data32 = (uint32_t *) data;
