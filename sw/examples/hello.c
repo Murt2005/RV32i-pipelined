@@ -1,10 +1,6 @@
 /*
- * Proves the C runtime works from SDRAM: newlib's printf with the `l` modifier
- * libmc silently dropped, malloc against the sbrk heap, string.h, and the
- * mcycle-based millisecond clock Doom asks for.
- *
- * Deliberately small and self-checking. If any of this is wrong, finding out
- * here costs seconds; finding out inside 30,000 lines of Doom does not.
+ * Self-checking smoke test of the C runtime running from SDRAM: newlib's printf,
+ * malloc against the sbrk heap, string.h, and a millisecond clock from mcycle
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,8 +13,7 @@ static unsigned long read_mcycle(void)
     return v;
 }
 
-/* What doomgeneric's DG_GetTicksMs becomes on this machine. No timer hardware
- * is needed: mcycle already exists and the core has a hardware divider now. */
+/* Milliseconds from mcycle, so no timer hardware is needed */
 #define CPU_HZ 50000000u
 static unsigned int ticks_ms(void)
 {
@@ -51,9 +46,9 @@ int main(void)
 
     /* string.h, which libmc mostly did not have. */
     char s[32];
-    strcpy(s, "doom");
-    strcat(s, "1.wad");
-    if (strcmp(s, "doom1.wad") != 0) { printf("FAIL strcat -> %s\n", s); fails++; }
+    strcpy(s, "hello");
+    strcat(s, ".txt");
+    if (strcmp(s, "hello.txt") != 0) { printf("FAIL strcat -> %s\n", s); fails++; }
     if (strlen(s) != 9) { printf("FAIL strlen\n"); fails++; }
 
     /* Hardware multiply and divide, through C rather than assembly. */

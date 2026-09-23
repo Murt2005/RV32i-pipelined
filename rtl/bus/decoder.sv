@@ -22,8 +22,6 @@ module bus_decoder #(
     input  memory_io_rsp  dmem_rsp,
     output memory_io_req  mmio_req,
     input  memory_io_rsp  mmio_rsp,
-    output memory_io_req  fb_req,
-    input  memory_io_rsp  fb_rsp,
     output memory_io_req  sdram_req,
     input  memory_io_rsp  sdram_rsp
 );
@@ -37,7 +35,6 @@ always_comb begin
         `BUS_IMEM:  all_ready = imem_rsp.ready;
         `BUS_DMEM:  all_ready = dmem_rsp.ready;
         `BUS_MMIO:  all_ready = mmio_rsp.ready;
-        `BUS_FB:    all_ready = fb_rsp.ready;
         `BUS_SDRAM: all_ready = sdram_rsp.ready;
         default:    all_ready = 1'b1;
     endcase
@@ -49,7 +46,6 @@ always_comb begin
     imem_req  = cpu_req;  imem_req.valid  = cpu_req.valid & (sel == `BUS_IMEM);
     dmem_req  = cpu_req;  dmem_req.valid  = cpu_req.valid & (sel == `BUS_DMEM);
     mmio_req  = cpu_req;  mmio_req.valid  = cpu_req.valid & (sel == `BUS_MMIO);
-    fb_req    = cpu_req;  fb_req.valid    = cpu_req.valid & (sel == `BUS_FB);
     sdram_req = cpu_req;  sdram_req.valid = cpu_req.valid & (sel == `BUS_SDRAM);
 end
 
@@ -72,7 +68,6 @@ always_comb begin
         `BUS_IMEM:  cpu_rsp = imem_rsp;
         `BUS_DMEM:  cpu_rsp = dmem_rsp;
         `BUS_MMIO:  cpu_rsp = mmio_rsp;
-        `BUS_FB:    cpu_rsp = fb_rsp;
         `BUS_SDRAM: cpu_rsp = sdram_rsp;
         default: begin
             cpu_rsp       = memory_io_no_rsp;

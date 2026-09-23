@@ -12,10 +12,7 @@
 module top #(
     parameter sdram_bytes = 32'h0010_0000
 ) (input clk, input reset, input [7:0] stall_rate, input [7:0] mem_delay,
-   output logic halt,
-   output logic frame_done,
-   input  logic key_strobe,
-   input  logic [8:0] key_event
+   output logic halt
    );
 
 logic [15:0] stall_lfsr;
@@ -70,10 +67,10 @@ always @(posedge clk) begin
     end
 end
 
-memory_io_req i_imem_req, i_dmem_req, i_mmio_req, i_fb_req, i_sdram_req;
+memory_io_req i_imem_req, i_dmem_req, i_mmio_req, i_sdram_req;
 memory_io_rsp i_imem_rsp, i_sdram_rsp;
-memory_io_req d_imem_req, d_dmem_req, d_mmio_req, d_fb_req, d_sdram_req;
-memory_io_rsp d_dmem_rsp, d_mmio_rsp, d_fb_rsp, d_sdram_rsp;
+memory_io_req d_imem_req, d_dmem_req, d_mmio_req, d_sdram_req;
+memory_io_rsp d_dmem_rsp, d_mmio_rsp, d_sdram_rsp;
 
 memory_io_rsp tie_off_rsp;
 assign tie_off_rsp = memory_io_no_rsp;
@@ -86,20 +83,17 @@ bus_decoder #(
     .imem_req(i_imem_req),   .imem_rsp(i_imem_rsp),
     .dmem_req(i_dmem_req),   .dmem_rsp(tie_off_rsp),
     .mmio_req(i_mmio_req),   .mmio_rsp(tie_off_rsp),
-    .fb_req(i_fb_req),       .fb_rsp(tie_off_rsp),
     .sdram_req(i_sdram_req), .sdram_rsp(i_sdram_rsp)
 );
 
 bus_decoder #(
-    .present((8'd1 << `BUS_DMEM) | (8'd1 << `BUS_MMIO)
-           | (8'd1 << `BUS_FB)   | (8'd1 << `BUS_SDRAM))
+    .present((8'd1 << `BUS_DMEM) | (8'd1 << `BUS_MMIO) | (8'd1 << `BUS_SDRAM))
 ) dbus (
     .clk(clk), .reset(reset),
     .cpu_req(data_mem_req), .cpu_addr(data_mem_addr), .cpu_rsp(data_mem_rsp),
     .imem_req(d_imem_req),   .imem_rsp(tie_off_rsp),
     .dmem_req(d_dmem_req),   .dmem_rsp(d_dmem_rsp),
     .mmio_req(d_mmio_req),   .mmio_rsp(d_mmio_rsp),
-    .fb_req(d_fb_req),       .fb_rsp(d_fb_rsp),
     .sdram_req(d_sdram_req), .sdram_rsp(d_sdram_rsp)
 );
 
@@ -135,24 +129,9 @@ memory_delay #(
     ,.rsp(d_dmem_rsp)
     );
 
-memory_delay #(
-    .size(32'h0001_0000)
-    ,.enable_rsp_addr(true)
-    ) fb_mem (
-    .clk(clk)
-    ,.reset(reset)
-    ,.max_delay(mem_delay)
-    ,.req(d_fb_req)
-    ,.rsp(d_fb_rsp)
-    );
-
 memory_io_req sdram_req;
 memory_io_rsp sdram_rsp;
 logic         icache_invalidate;
-logic         frame_valid;
-logic         palette_valid;
-logic [7:0]   palette_index;
-logic [23:0]  palette_rgb;
 
 memory_io_req ic_mem_req, dc_mem_req;
 memory_io_rsp ic_mem_rsp, dc_mem_rsp;
@@ -206,25 +185,13 @@ mmio mmio_m(
     .putchar_valid(putchar_valid), .putchar_data(putchar_data),
     .halt_pulse(halt_pulse),
     .tohost_valid(tohost_valid), .tohost_data(tohost_data),
-    .icache_invalidate(icache_invalidate),
-    .frame_valid(frame_valid),
-    .palette_valid(palette_valid),
-    .palette_index(palette_index),
-    .palette_rgb(palette_rgb),
-    .key_strobe(key_strobe),
-    .key_event(key_event)
+    .icache_invalidate(icache_invalidate)
 );
-
-logic [23:0] palette [0:255] /*verilator public_flat_rw*/;
-
-always @(posedge clk)
-    if (palette_valid) palette[palette_index] <= palette_rgb;
 
 always @(posedge clk) if (putchar_valid) $write("%c", putchar_data);
 
 always @(posedge clk) if (tohost_valid) $write("\nTOHOST=%0d\n", tohost_data);
 
 assign halt = halt_pulse;
-assign frame_done = frame_valid;
 
 endmodule

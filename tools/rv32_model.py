@@ -60,7 +60,6 @@ class Rv32Model:
     # by growing `mem`: SDRAM sits at 0x80000000, and a flat bytearray covering
     # that would be two gigabytes. Each entry is (base, size).
     SDRAM_BASE, SDRAM_SIZE = 0x80000000, 1 << 20
-    FB_BASE,    FB_SIZE    = 0x10000000, 1 << 16
 
     def __init__(self, text, data, text_base=0x00010000, data_base=0x00020000):
         self.mem = bytearray(1 << 18)          # 256 KiB covers both regions
@@ -69,7 +68,6 @@ class Rv32Model:
         self.mem[text_base:text_base + len(text)] = text
         self.mem[data_base:data_base + len(data)] = data
         self.sdram = bytearray(self.SDRAM_SIZE)
-        self.fb = bytearray(self.FB_SIZE)
         self.x = [0] * 32
         self.pc = text_base
         self.output = bytearray()
@@ -87,8 +85,6 @@ class Rv32Model:
         """
         if self.SDRAM_BASE <= addr < self.SDRAM_BASE + (1 << 26):
             return self.sdram, (addr - self.SDRAM_BASE) % self.SDRAM_SIZE
-        if self.FB_BASE <= addr < self.FB_BASE + self.FB_SIZE:
-            return self.fb, addr - self.FB_BASE
         return self.mem, addr
 
     def _ld(self, addr, n, signed):

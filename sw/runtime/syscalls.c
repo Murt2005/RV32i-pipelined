@@ -1,15 +1,6 @@
 /*
- * The bottom of newlib, for this machine.
- *
- * libmc was a hand-written freestanding library with no malloc, no file I/O and
- * no memcpy, and a printf that silently drops the `l` in %ld. Doom needs all of
- * those, so C programs that run from SDRAM link against newlib instead and
- * newlib calls the handful of functions below. libmc is untouched and the
- * assembly test suite still uses it.
- *
- * The whole "operating system" here is two memory-mapped words: one to print a
- * byte, one to stop the machine. Everything else is either backed by a file
- * image already in memory or is honestly a stub.
+ * The system calls newlib needs, for C programs that run from SDRAM
+ * Output and halt go through the MMIO registers; files live in memory
  */
 
 #include <errno.h>
@@ -58,8 +49,7 @@ void ramfile_register(const char *name, void *data, long size)
 
 static int name_eq(const char *a, const char *b)
 {
-    /* Compare on the basename only. Doom is given a path and this machine has
-     * no directories, so "/usr/share/doom1.wad" has to find "doom1.wad". */
+    /* Compare basenames only, since there are no directories */
     const char *sa = a, *sb = b, *p;
     for (p = a; *p; p++) if (*p == '/') sa = p + 1;
     for (p = b; *p; p++) if (*p == '/') sb = p + 1;
@@ -134,12 +124,7 @@ int _fstat(int fd, struct stat *st)
 {
     int i = fd - FD_BASE;
 
-    /* Zeroed first, and st_blksize set explicitly. newlib sizes each stdio
-     * stream's buffer from st_blksize and mallocs exactly that many bytes --
-     * so leaving it as whatever was on the stack picks a random buffer size for
-     * every file opened. Doom reads its WAD through fread, so the effect is
-     * lumps that arrive shifted or truncated: the game runs, the palette is
-     * fine, and the pictures are noise. */
+    /* newlib sizes each stream's buffer from st_blksize, so it must not be garbage */
     for (unsigned k = 0; k < sizeof *st; k++)
         ((char *)st)[k] = 0;
 
@@ -177,13 +162,9 @@ void _exit(int code)
 int _kill(int pid, int sig) { (void)pid; (void)sig; errno = EINVAL; return -1; }
 int _getpid(void)           { return 1; }
 
-/* Doom asks for these; nothing here has a clock or a filesystem to change. */
+/* Stubs newlib links against; there is no filesystem or clock */
 int _unlink(const char *name)              { (void)name; errno = ENOENT; return -1; }
 int _link(const char *a, const char *b)    { (void)a; (void)b; errno = EMLINK; return -1; }
 int _stat(const char *f, struct stat *st)  { (void)f; st->st_mode = S_IFCHR; return 0; }
 clock_t _times(struct tms *buf)            { (void)buf; return (clock_t)-1; }
 
-/* Doom calls this to create its save directory. There is no filesystem, and
- * saving is not part of running the game, so it succeeds and does nothing --
- * failing would send Doom down an error path for something it never uses. */
-int mkdir(const char *path, mode_t mode) { (void)path; (void)mode; return 0; }

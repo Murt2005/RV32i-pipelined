@@ -6,9 +6,8 @@
  * holds a stub whose whole job is to jump to SDRAM, and everything else lives
  * there.
  *
- * .data and .bss are in SDRAM too, not in the on-chip data memory. Doom's zone
- * heap alone is larger than that memory, and splitting the program across two
- * regions to save a few cycles on globals would buy nothing.
+ * .data and .bss are in SDRAM too, since a C program's heap outgrows the
+ * on-chip data memory.
  *
  * The MMIO block is still at 0x0002FFC0 and the stack still starts below it,
  * because print and halt go through those registers and the existing runtime

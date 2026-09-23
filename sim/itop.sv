@@ -20,10 +20,7 @@ top the_top(
     ,.reset(reset)
     ,.stall_rate(stall_rate)
     ,.mem_delay(mem_delay)
-    ,.halt(halt)
-    ,.frame_done()
-    ,.key_strobe(1'b0)
-    ,.key_event(9'd0));
+    ,.halt(halt));
 
 always #5 clk = ~clk;
 
