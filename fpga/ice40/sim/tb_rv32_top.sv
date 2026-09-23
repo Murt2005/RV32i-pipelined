@@ -149,6 +149,23 @@ module tb_rv32_top();
         end
     endtask
 
+    // riscv-tests report through tohost, which the core wrote to data memory
+    task automatic read_tohost;
+        logic [31:0] w;
+        logic [7:0]  byte_in;
+        begin
+            send_byte(8'h52);                    // 'R'
+            send_byte(8'hC0); send_byte(8'hFF); send_byte(8'h02); send_byte(8'h00);
+            send_byte(8'h04); send_byte(8'h00);
+            expect_byte(8'h72, "tohost read ack");
+            for (int k = 0; k < 4; k = k + 1) begin
+                recv_byte(byte_in);
+                w[8*k +: 8] = byte_in;
+            end
+            $display("TOHOST=%0d", w);
+        end
+    endtask
+
     logic [7:0] b;
     integer     nout;
     string      out_line;
@@ -212,6 +229,7 @@ module tb_rv32_top();
                 if (out_line.len() != 0) $display("%s", out_line);
                 $display("--- HALT after %0d bytes ---", nout);
                 if (led_r_n !== 1'b0) $display("WARNING: halt LED not lit");
+                read_tohost();
                 $finish;
             end
             nout = nout + 1;

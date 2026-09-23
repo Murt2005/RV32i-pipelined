@@ -74,35 +74,33 @@ lint:
 	verilator --lint-only -Wall --top-module $(TOP) $(INC) \
 		$(TOP).sv uart.sv memory_spram.sv $(RTL)/core/cpu.sv 2>&1 | head -60
 
-# Board-level simulation over the UART protocol, with a model of the SPRAM
-# make sim runs every directed test; make sim TEST=isa/add_sub runs one
+# Board-level simulation over the UART protocol, built without M like the bitstream
+# make sim runs rv32ui and rv32mi; make sim TEST=riscv-tests/add runs one
 IVERILOG   ?= iverilog
 SIM_TB     := $(BUILD)/tb_rv32_top
-
-# sdram: this board has no SDRAM
-SIM_EXCLUDE := isa/sdram
-TEST       ?= $(filter-out $(SIM_EXCLUDE),$(patsubst $(ROOT)/tests/%.s,%,\
-              $(wildcard $(ROOT)/tests/isa/*.s $(ROOT)/tests/hazards/*.s)))
+TEST       ?=
 
 $(SIM_TB): sim/tb_rv32_top.sv sim/sb_spram256ka.sv $(TOP).sv uart.sv memory_spram.sv \
            $(wildcard $(RTL)/core/*.sv) $(RTL)/mem/memory_io.sv
 	@mkdir -p $(BUILD)
-	$(IVERILOG) -g2012 -Isim $(INC) -o $@ sim/tb_rv32_top.sv
+	$(IVERILOG) -g2012 -Dext_m_disable -Isim $(INC) -o $@ sim/tb_rv32_top.sv
 
 sim: $(SIM_TB)
-	@pass=0; fail=0; \
-	for t in $(TEST); do \
+	@$(MAKE) -s -C $(ROOT) riscv-tests riscv-tests-mi build/tools/dumphex
+	@tests="$(TEST)"; \
+	[ -n "$$tests" ] || tests=`cd $(ROOT)/build && ls riscv-tests/*.elf riscv-tests-mi/*.elf | sed 's/\.elf$$//'`; \
+	pass=0; fail=0; \
+	for t in $$tests; do \
 		d=$(ROOT)/build/hex/ice40/$$t; \
-		$(MAKE) -s -C $(ROOT) build/tests/$$t.elf build/tools/dumphex; \
-		/bin/bash $(ROOT)/tools/elftohex.sh $(ROOT)/build/tests/$$t.elf $$d >/dev/null; \
+		/bin/bash $(ROOT)/tools/elftohex.sh $(ROOT)/build/$$t.elf $$d >/dev/null; \
 		out=`cd $$d && $(CURDIR)/$(SIM_TB) 2>&1`; \
-		if echo "$$out" | grep -q "HALT after" && ! echo "$$out" | grep -qE "FAIL|FATAL"; then \
+		if echo "$$out" | grep -q "^TOHOST=1$$"; then \
 			pass=$$((pass+1)); echo "PASS $$t"; \
 		else \
-			fail=$$((fail+1)); echo "FAIL $$t"; echo "$$out" | grep -aE "FAIL|FATAL" | head -3; \
+			fail=$$((fail+1)); echo "FAIL $$t"; echo "$$out" | grep -aE "TOHOST|FATAL" | head -3; \
 		fi; \
 	done; \
-	echo ""; echo "$$pass passed, $$fail failed, `echo $(TEST) | wc -w | tr -d ' '` total"; \
+	echo ""; echo "$$pass passed, $$fail failed, $$((pass+fail)) total"; \
 	[ $$fail -eq 0 ]
 
 clean:
