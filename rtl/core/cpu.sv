@@ -496,7 +496,7 @@ assign div_wait = 1'b0;
 `endif
 
 // Machine-mode CSR file
-word mstatus_r, mtvec_r, mepc_r, mcause_r, mtval_r;
+word mstatus_r, mtvec_r, mscratch_r, mepc_r, mcause_r, mtval_r;
 
 // Machine counters; 64 bits so a long benchmark cannot wrap mid-measurement
 logic [63:0] mcycle_r, minstret_r;
@@ -504,13 +504,16 @@ logic [63:0] mcycle_r, minstret_r;
 localparam int MSTATUS_MIE  = 3;
 localparam int MSTATUS_MPIE = 7;
 
+localparam word MSTATUS_MPP_M = `word_size'h0000_1800;
+
 logic [11:0] csr_addr;
 word         csr_read;
 word         csr_write;
 bool         csr_wen;
+bool         csr_exists;
 
 bool  is_system, is_csr, is_ecall, is_ebreak, is_mret;
-bool  illegal_instr, misaligned_load, misaligned_store;
+bool  illegal_instr, illegal_csr, misaligned_fetch, misaligned_load, misaligned_store;
 word  mem_addr;
 trap_t trap;
 
@@ -575,17 +578,28 @@ always_comb begin
     is_ebreak = is_system && (decoded_instruction_in.f3 == 3'b000) && (csr_addr == 12'h001);
     is_mret   = is_system && (decoded_instruction_in.f3 == 3'b000) && (csr_addr == 12'h302);
 
+    csr_exists = true;
     case (csr_addr)
-        csr_mstatus: csr_read = mstatus_r;
-        csr_mtvec:   csr_read = mtvec_r;
-        csr_mepc:    csr_read = mepc_r;
-        csr_mcause:  csr_read = mcause_r;
-        csr_mtval:   csr_read = mtval_r;
-        csr_mcycle:    csr_read = mcycle_r[31:0];
-        csr_mcycleh:   csr_read = mcycle_r[63:32];
-        csr_minstret:  csr_read = minstret_r[31:0];
-        csr_minstreth: csr_read = minstret_r[63:32];
-        default:     csr_read = `word_size'd0;   // unimplemented reads as zero
+        csr_mstatus:  csr_read = mstatus_r | MSTATUS_MPP_M;
+        csr_misa:     csr_read = misa_value;
+        csr_mtvec:    csr_read = mtvec_r;
+        csr_mscratch: csr_read = mscratch_r;
+        csr_mepc:     csr_read = mepc_r;
+        csr_mcause:   csr_read = mcause_r;
+        csr_mtval:    csr_read = mtval_r;
+        csr_mcycle,   csr_cycle:    csr_read = mcycle_r[31:0];
+        csr_mcycleh,  csr_cycleh:   csr_read = mcycle_r[63:32];
+        csr_minstret, csr_instret:  csr_read = minstret_r[31:0];
+        csr_minstreth, csr_instreth: csr_read = minstret_r[63:32];
+        // No interrupts, IDs or debug triggers; these exist but always read as zero
+        csr_mie, csr_mip, csr_mstatush,
+        csr_mvendorid, csr_marchid, csr_mimpid, csr_mhartid, csr_mconfigptr,
+        csr_tselect, csr_tdata1, csr_tdata2:
+                      csr_read = `word_size'd0;
+        default: begin
+            csr_read   = `word_size'd0;
+            csr_exists = false;
+        end
     endcase
 
     begin
@@ -618,8 +632,23 @@ always_comb begin
     if (is_div_op && div_done)
         execute_result_comb = {1'b0, div_result};
 
+    next_pc_result = compute_next_pc(
+        cast_to_ext_operand(rd1),
+        cast_to_ext_operand(rd2),
+        decoded_instruction_in.imm,
+        decoded_instruction_in.pc,
+        fetched_instruction_in.pc,
+        decoded_instruction_in.instruction_opcode,
+        decoded_instruction_in.f3);
+
     // Exceptions
-    illegal_instr = (decoded_instruction_in.instruction_opcode == q_unknown);
+    illegal_csr   = is_csr && (!csr_exists || (csr_wen && (csr_addr[11:10] == 2'b11)));
+    illegal_instr = !is_legal_instruction(decoded_instruction_in.instruction) || illegal_csr;
+
+    misaligned_fetch = ((decoded_instruction_in.instruction_opcode == q_jal)
+                     || (decoded_instruction_in.instruction_opcode == q_jalr)
+                     || (decoded_instruction_in.instruction_opcode == q_branch))
+                     && next_pc_result.next_pc[1];
 
     mem_addr = execute_result_comb[`word_size-1:0];
     misaligned_load  = (decoded_instruction_in.instruction_opcode == q_load)
@@ -641,6 +670,10 @@ always_comb begin
             trap.taken = true;
             trap.cause = cause_breakpoint;
             trap.tval  = decoded_instruction_in.pc;
+        end else if (misaligned_fetch) begin
+            trap.taken = true;
+            trap.cause = cause_misaligned_fetch;
+            trap.tval  = next_pc_result.next_pc;
         end else if (misaligned_load) begin
             trap.taken = true;
             trap.cause = cause_misaligned_load;
@@ -651,16 +684,6 @@ always_comb begin
             trap.tval  = mem_addr;
         end
     end
-
-
-    next_pc_result = compute_next_pc(
-        cast_to_ext_operand(rd1),
-        cast_to_ext_operand(rd2),
-        decoded_instruction_in.imm,
-        decoded_instruction_in.pc,
-        fetched_instruction_in.pc,
-        decoded_instruction_in.instruction_opcode,
-        decoded_instruction_in.f3);
 
     next_pc_comb  = next_pc_result.next_pc;
     mispredict    = next_pc_result.mispredict;
@@ -726,6 +749,7 @@ always_ff @(posedge clk) begin
         mcycle_r   <= 64'd0;
         minstret_r <= 64'd0;
         mtvec_r   <= `word_size'd0;
+        mscratch_r <= `word_size'd0;
         mepc_r    <= `word_size'd0;
         mcause_r  <= `word_size'd0;
         mtval_r   <= `word_size'd0;
@@ -747,12 +771,18 @@ always_ff @(posedge clk) begin
                 mstatus_r[MSTATUS_MPIE] <= 1'b1;
             end else if (csr_wen) begin
                 case (csr_addr)
-                    csr_mstatus: mstatus_r <= csr_write;
-                    csr_mtvec:   mtvec_r   <= csr_write;
-                    csr_mepc:    mepc_r    <= csr_write;
-                    csr_mcause:  mcause_r  <= csr_write;
-                    csr_mtval:   mtval_r   <= csr_write;
-                    default:     ;                     // writes to unimplemented CSRs are dropped
+                    csr_mstatus:   mstatus_r  <= csr_write & ((`word_size'd1 << MSTATUS_MIE)
+                                                            | (`word_size'd1 << MSTATUS_MPIE));
+                    csr_mtvec:     mtvec_r    <= {csr_write[`word_size-1:2], 2'b00};
+                    csr_mscratch:  mscratch_r <= csr_write;
+                    csr_mepc:      mepc_r     <= {csr_write[`word_size-1:2], 2'b00};
+                    csr_mcause:    mcause_r   <= csr_write;
+                    csr_mtval:     mtval_r    <= csr_write;
+                    csr_mcycle:    mcycle_r   <= {mcycle_r[63:32], csr_write};
+                    csr_mcycleh:   mcycle_r   <= {csr_write, mcycle_r[31:0]};
+                    csr_minstret:  minstret_r <= {minstret_r[63:32], csr_write};
+                    csr_minstreth: minstret_r <= {csr_write, minstret_r[31:0]};
+                    default:       ;
                 endcase
             end
         end

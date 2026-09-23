@@ -32,6 +32,7 @@ SIM = "build/sim/result-rvfi"
 # knows nothing about, take the core's value and keep stepping rather than
 # reporting a mismatch that is really a model gap.
 MMIO_LO, MMIO_HI = 0x0002FFF0, 0x0002FFFF
+MRET = 0x30200073
 FIELDS = ("order pc_rdata pc_wdata insn rs1_addr rs1_rdata rs2_addr rs2_rdata "
           "rd_addr rd_wdata mem_addr mem_rmask mem_wmask mem_rdata mem_wdata "
           "trap").split()
@@ -116,9 +117,6 @@ def compare(recs, text, data, limit=None, verbose=False):
     for n, r in enumerate(recs):
         if limit and n >= limit:
             break
-        if r["trap"]:
-            # The model has no trap support, so stop rather than report noise.
-            break
 
         if model.pc != r["pc_rdata"]:
             errors.append(f"  #{n} pc: core {r['pc_rdata']:08x}, model {model.pc:08x}")
@@ -131,6 +129,16 @@ def compare(recs, text, data, limit=None, verbose=False):
             errors.append(f"  #{n} @{model.pc:08x} insn: core {r['insn']:08x}, "
                           f"memory {insn:08x}")
             break
+
+        # The model has no trap or CSR state, so it cannot know where a trap or
+        # an MRET goes. Neither writes a register, so follow the core's next pc
+        # and keep checking rather than stopping at the first one.
+        if r["trap"] or insn == MRET:
+            if r["rd_addr"]:
+                errors.append(f"  #{n} @{model.pc:08x} trap or mret wrote x{r['rd_addr']}")
+                break
+            model.pc = r["pc_wdata"]
+            continue
 
         for which in ("rs1", "rs2"):
             addr = r[f"{which}_addr"]
@@ -193,7 +201,8 @@ def main():
     if args.all:
         elfs += sorted(glob.glob(os.path.join(repo_root, "build/tests/isa/*.elf")))
         elfs += sorted(glob.glob(os.path.join(repo_root, "build/tests/hazards/*.elf")))
-        elfs += sorted(glob.glob(os.path.join(repo_root, "build/riscv-tests/*.elf")))
+        for suite in ("riscv-tests", "riscv-tests-m", "riscv-tests-mi"):
+            elfs += sorted(glob.glob(os.path.join(repo_root, f"build/{suite}/*.elf")))
     elif args.elf:
         elfs = [os.path.abspath(args.elf)]
     else:

@@ -118,10 +118,10 @@ build/sim/result-rvfi: $(RTL_SRC)
 RVFI_LATENCY ?= 0
 
 .PHONY: rvfi-check rvfi-check-slow
-rvfi-check: build/sim/result-rvfi $(TOOLS) riscv-tests
+rvfi-check: build/sim/result-rvfi $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi
 	python3 tools/rvfi_check.py --all --mem-latency $(RVFI_LATENCY)
 
-rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests
+rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi
 	@rc=0; for d in 1 4 8; do \
 		printf 'rvfi mem-latency %-3s ' $$d; \
 		python3 tools/rvfi_check.py --all --mem-latency $$d > build/rvfi-$$d.log 2>&1 \
@@ -636,6 +636,28 @@ riscv-tests-m: $(RVTESTS_M_ELF)
 
 run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
 	$(call run-rvtests,rv32um,$(RVTESTS_M),riscv-tests-m)
+
+# --------------------------------------------------------------------
+# Official riscv-tests rv32mi suite (machine-mode CSRs and exceptions).
+# --------------------------------------------------------------------
+RVTESTS_MI_DIR := tests/riscv-tests/isa/rv32mi
+
+# pmpaddr: assumes physical memory protection, which this core does not have.
+RVTESTS_MI_EXCLUDE := pmpaddr
+
+RVTESTS_MI     := $(filter-out $(RVTESTS_MI_EXCLUDE),$(basename $(notdir $(wildcard $(RVTESTS_MI_DIR)/*.S))))
+RVTESTS_MI_ELF := $(addprefix build/riscv-tests-mi/,$(addsuffix .elf,$(RVTESTS_MI)))
+
+.PHONY: riscv-tests-mi run-riscv-tests-mi-iverilog
+
+build/riscv-tests-mi/%.elf: $(RVTESTS_MI_DIR)/%.S $(RVTEST_LD)
+	mkdir -p $(dir $@)
+	$(CC) $(RVTEST_FLAGS) -o $@ $<
+
+riscv-tests-mi: $(RVTESTS_MI_ELF)
+
+run-riscv-tests-mi-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-mi
+	$(call run-rvtests,rv32mi,$(RVTESTS_MI),riscv-tests-mi)
 
 # --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from

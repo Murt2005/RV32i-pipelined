@@ -229,18 +229,45 @@ function automatic funct7 decode_funct7(instr32 instr, instr_format format);
     return 7'd0;
 endfunction
 
-// Anything unimplemented reads as zero and ignores writes
-localparam [11:0] csr_mstatus = 12'h300;
-localparam [11:0] csr_mtvec   = 12'h305;
-localparam [11:0] csr_mepc    = 12'h341;
-localparam [11:0] csr_mcause  = 12'h342;
-localparam [11:0] csr_mtval   = 12'h343;
+// Accessing a CSR that is not listed here is an illegal instruction
+localparam [11:0] csr_mstatus  = 12'h300;
+localparam [11:0] csr_misa     = 12'h301;
+localparam [11:0] csr_mie      = 12'h304;
+localparam [11:0] csr_mtvec    = 12'h305;
+localparam [11:0] csr_mstatush = 12'h310;
+localparam [11:0] csr_mscratch = 12'h340;
+localparam [11:0] csr_mepc     = 12'h341;
+localparam [11:0] csr_mcause   = 12'h342;
+localparam [11:0] csr_mtval    = 12'h343;
+localparam [11:0] csr_mip      = 12'h344;
 
-// Machine counters, read-only, Software needs a cycle count to benchmark itself
+// Machine counters. Software needs a cycle count to benchmark itself
 localparam [11:0] csr_mcycle    = 12'hB00;
 localparam [11:0] csr_minstret  = 12'hB02;
 localparam [11:0] csr_mcycleh   = 12'hB80;
 localparam [11:0] csr_minstreth = 12'hB82;
+
+// Read-only copies of the counters and ID registers; all read zero
+localparam [11:0] csr_cycle      = 12'hC00;
+localparam [11:0] csr_instret    = 12'hC02;
+localparam [11:0] csr_cycleh     = 12'hC80;
+localparam [11:0] csr_instreth   = 12'hC82;
+localparam [11:0] csr_mvendorid  = 12'hF11;
+localparam [11:0] csr_marchid    = 12'hF12;
+localparam [11:0] csr_mimpid     = 12'hF13;
+localparam [11:0] csr_mhartid    = 12'hF14;
+localparam [11:0] csr_mconfigptr = 12'hF15;
+
+// Debug triggers. None are implemented yet...
+localparam [11:0] csr_tselect = 12'h7A0;
+localparam [11:0] csr_tdata1  = 12'h7A1;
+localparam [11:0] csr_tdata2  = 12'h7A2;
+
+`ifndef ext_m_disable
+localparam [31:0] misa_value = 32'h4000_1100;
+`else
+localparam [31:0] misa_value = 32'h4000_0100;
+`endif
 
 localparam [31:0] cause_misaligned_fetch = 32'd0;
 localparam [31:0] cause_illegal_instr    = 32'd2;
@@ -261,6 +288,41 @@ typedef enum logic [2:0] {
 
 function automatic bool is_csr_op(funct3 f3);
     return (f3 != 3'b000);
+endfunction
+
+function automatic bool is_legal_instruction(instr32 instr);
+    funct3 f3;
+    funct7 f7;
+    bool   legal;
+
+    f3 = instr[14:12];
+    f7 = instr[31:25];
+
+    case (decode_opcode_q(instr))
+        q_lui, q_auipc, q_jal: legal = 1'b1;
+        q_jalr:     legal = (f3 == 3'b000);
+        q_branch:   legal = (f3 != 3'b010) && (f3 != 3'b011);
+        q_load:     legal = (f3 != 3'b011) && (f3 != 3'b110) && (f3 != 3'b111);
+        q_store:    legal = (f3 == 3'b000) || (f3 == 3'b001) || (f3 == 3'b010);
+        q_misc_mem: legal = (f3 == 3'b000) || (f3 == 3'b001);   // fence, fence.i
+        q_op_imm:   legal = (f3 == 3'b001) ? (f7 == 7'b0000000)
+                          : (f3 == 3'b101) ? ((f7 & 7'b1011111) == 7'b0000000)
+                          : 1'b1;
+        q_op:       legal = (f7 == 7'b0000000)
+                         || ((f7 == 7'b0100000) && ((f3 == 3'b000) || (f3 == 3'b101)))
+`ifndef ext_m_disable
+                         || (f7 == f7_ext_mul)
+`endif
+                         ;
+        q_system:   legal = (f3 == 3'b100) ? 1'b0
+                          : (f3 != 3'b000) ? 1'b1
+                          : (instr == 32'h0000_0073)     // ecall
+                         || (instr == 32'h0010_0073)     // ebreak
+                         || (instr == 32'h3020_0073)     // mret
+                         || (instr == 32'h1050_0073);    // wfi, run as a nop
+        default:    legal = 1'b0;
+    endcase
+    return legal;
 endfunction
 
 function automatic bool is_misaligned(word addr, memory_op op);
