@@ -1,153 +1,124 @@
-# RV32I Pipelined Processor
+# RV32IM Pipelined Processor
 
-A 32-bit RISC-V (RV32I) pipelined processor in SystemVerilog, with separate instruction and data memories and a test framework using Icarus Verilog or Verilator.
+A five-stage pipelined RISC-V core in SystemVerilog, tested with the official
+riscv-tests suites, checked with riscv-formal, and running on a pico2-ice
+(iCE40UP5K) FPGA board.
+
+- **ISA:** RV32IM with Zicsr, machine mode only, precise traps
+- **Pipeline:** fetch, decode, execute, memory, writeback, with full bypassing,
+  a load-use stall and an 8-entry branch target buffer
+- **Memory:** a ready/valid request/response interface, so the core runs
+  against memories that answer late or refuse requests
+- **Hardware:** the RV32I build runs on the pico2-ice, loaded over USB (see
+  [`fpga/README.md`](fpga/README.md))
+
+## Quick start
+
+```bash
+git submodule update --init --recursive
+# edit site-config.sh to point at your RISC-V toolchain and simulators
+make            # build and run every riscv-tests suite under Icarus Verilog
+```
+
+You need a RISC-V GCC toolchain (`riscv64-unknown-elf-*`), Icarus Verilog, and
+Python 3. Verilator is only needed for `make coverage`; the FPGA and formal
+flows have their own requirements, listed in their READMEs.
 
 ## Architecture
 
-- **Top** (`top.sv`): Instantiates the **core**, instruction memory (code), and data memory. Reset PC is `0x0001_0000`. MMIO: write to `0x0002_FFF8` for putchar, write to `0x0002_FFFC` for halt.
-- **Core** (`cpu.sv`): Five-stage pipeline — **fetch** → **decode** (and writeback) → **execute** → **memory** → **writeback**, plus **control** for hazards and redirects.
-- **Support**: `base.sv` (macros), `system.sv` (word/address sizes), `memory_io.sv` (req/rsp structs), `memory.sv` (byte-initialized RAM), `riscv.sv` / `riscv32_common.sv` (ISA types and decode).
+| Stage | Does |
+|---|---|
+| Fetch | Issues instruction fetches, predicts taken branches with the BTB, drops responses for redirected fetches |
+| Decode | Decodes, reads the register file, and writes back the instruction retiring that cycle |
+| Execute | Bypasses operands, runs the ALU, resolves branches, accesses CSRs, and takes traps |
+| Memory | Issues loads and stores |
+| Writeback | Formats load data and writes the register file |
 
-Memory map (from `ld.script`): `.text` at `0x00010000`, `.rodata`/`.data`/`.bss` at `0x00020000`.
+Multiply is single-cycle. Divide and remainder use an iterative divider
+(`rtl/core/divider.sv`) that takes about 35 cycles and stalls the pipeline
+while it runs. Traps are taken in execute, which is the commit point, so a
+faulting instruction never reaches writeback.
 
-## Supported instructions
+### CSRs and exceptions
 
-The core implements **RV32I** plus the machine-mode CSRs and traps the base ISA
-needs. Supported instructions:
+| CSRs | |
+|---|---|
+| Read/write | `mstatus` (MIE, MPIE), `mtvec` (direct mode), `mscratch`, `mepc`, `mcause`, `mtval`, `mcycle[h]`, `minstret[h]` |
+| Read-only | `misa`, `cycle[h]`, `instret[h]`, and the ID registers, which read zero |
+| Always zero | `mie`, `mip`, `mstatush`, `tselect`, `tdata1`, `tdata2` (no interrupts, no debug triggers) |
 
-| Instruction Type | Instructions |
-|-------------------|--------------|
-| **OP** | `add`, `sub`, `sll`, `slt`, `sltu`, `xor`, `srl`, `sra`, `or`, `and` |
-| **OP-IMM** | `addi`, `slti`, `sltiu`, `xori`, `ori`, `andi`, `slli`, `srli`, `srai` |
-| **Store** | `sb`, `sh`, `sw` |
-| **Load** | `lb`, `lh`, `lw`, `lbu`, `lhu` |
-| **Branch** | `beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu` |
-| **AUIPC** | `auipc` |
-| **JAL** | `jal` |
-| **JALR** | `jalr` |
-| **LUI** | `lui` |
-| **MISC-MEM** | `fence` (architecturally a NOP: in-order pipeline, separate instruction and data memories) |
-| **SYSTEM** | `csrrw`, `csrrs`, `csrrc`, `csrrwi`, `csrrsi`, `csrrci`, `ecall`, `ebreak`, `mret` |
-
-### Exceptions
-
-Traps are taken in the execute stage, which is the commit point — instructions
-behind a redirect are already flushed at decode before they get there, so the
-faulting instruction is turned into a bubble and never reaches writeback.
+Accessing any other CSR, or writing a read-only one, is an illegal instruction.
 
 | Cause | Raised by |
 |---|---|
-| 2 | illegal instruction (including any word with `instr[1:0] != 2'b11`) |
+| 0 | jump or taken branch to an address that isn't 4-byte aligned |
+| 2 | illegal instruction |
 | 3 | `ebreak` |
 | 4 / 6 | misaligned load / store |
-| 11 | `ecall` from M-mode |
+| 11 | `ecall` |
 
-CSRs implemented: `mstatus` (MIE/MPIE), `mtvec` (direct mode), `mepc`,
-`mcause`, `mtval`. Anything else reads as zero and ignores writes. Interrupts
-are not implemented.
+### Memory map
 
-## Build System
+This is the simulation top, `rtl/top.sv`. The pico2-ice top has the on-chip
+memories and MMIO but no SDRAM.
 
-- **Config**: `site-config.sh` sets `RISCV_PREFIX`, `RISCV_LIB`, `IVERILOG`, `VERILATOR`. Edit for your toolchain and simulators.
-- **Tools**: RISC-V toolchain (gcc/as/ld), `dumphex` (built from `dumphex.c`), and either Icarus Verilog or Verilator.
-- **Libraries**: `libmc/` provides a small C runtime (`libmc.a`); build with `make -C libmc`.
+| Address | What |
+|---|---|
+| `0x0001_0000` | Instruction memory, 64 KiB; the reset PC |
+| `0x0002_0000` | Data memory, 64 KiB, minus the MMIO block |
+| `0x0002_FFC0` | MMIO: `tohost` (`FFC0`), I-cache invalidate (`FFD0`), cycles (`FFF0`), instructions retired (`FFF4`), putchar (`FFF8`), halt (`FFFC`) |
+| `0x8000_0000` | SDRAM model, behind 16 KiB instruction and data caches |
 
-## Toolchain and build order
+## Verification
 
-**Toolchain**: (1) **RISC-V** — `$(RISCV_PREFIX)-gcc`, `-as`, `-ld`, `-objcopy` (RV32I, no multiply); (2) **Host** — plain `gcc` to build `dumphex`; (3) **Sim** — Icarus Verilog (`iverilog`) or Verilator. Paths come from `site-config.sh`.
+| Command | What it checks |
+|---|---|
+| `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment |
+| `make rvfi-check` | Replays every retired instruction of every test through a reference model (`tools/rv32_model.py`) |
+| `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
+| `make cycle-check` | rv32ui cycle counts against the checked-in baseline, to catch timing changes |
+| `make divider-tb` | The divider on its own: every spec corner case plus random operands |
+| `make coverage` | Verilator line and toggle coverage over every suite |
+| `python3 tools/rv32_diff.py --sim` | Random RV32IM programs against the reference model |
+| `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
-**What happens when you run `make`** (default target is `result-iverilog`):
+Excluded riscv-tests: `fence_i` (instruction and data memories are separate, so
+code can't be modified in place), `ma_data` (it expects misaligned accesses to
+be emulated; this core traps instead, which the spec also allows) and
+`pmpaddr` (no physical memory protection).
 
-1. **Build `dumphex`** — host `gcc` compiles `dumphex.c`; used later to turn binary into byte-wide `.hex` files for the memories.
-2. **Build `libmc/libmc.a`** — RISC-V C runtime (e.g. `printf`, `putc`); `make -C libmc` (after a clean).
-3. **Build the program** — RISC-V `as` assembles `start.s`, `gcc` compiles `test.c`; `ld` links them with `ld.script` and `libmc.a` into the `test` ELF.
-4. **ELF → hex** — `elftohex.sh test .` runs:
-   - `objcopy -j .text` → binary; `dumphex` writes `code0.hex`–`code3.hex` (instruction memory, 64 KiB).
-   - `objcopy -R .text` → binary; `dumphex` writes `data0.hex`–`data3.hex` (data memory, 64 KiB).
-5. **Build simulator** — `iverilog` compiles `itop.sv` (and included RTL) into the `result-iverilog` executable.
-6. **Run** — `./result-iverilog` runs until the program writes to the halt address; then the Makefile removes the binary.
+riscv-tests only need a linker script from this repo,
+`tests/riscv-tests-env/link.ld`, which maps them onto the memory map above.
 
-For **`make run-test-<name>-iverilog`**: build the test ELF from `tests/<name>.s` (with `test_macros.s` / `test_runtime.s`), run `elftohex.sh` on that ELF to refresh the root `*.hex`, then run `build/sim/result-iverilog` (which reads those hex files).
+## Known issues
 
-## Tests
+- **Liveness under external stall.** riscv-formal found a case where a
+  one-cycle `stall` with a `jal` in fetch leaves the instruction latched and
+  never retiring. The pico2-ice uses `stall` for UART backpressure.
+- **The board build is 99% full.** 5251/5280 logic cells on the iCE40UP5K, and
+  timing at 12 MHz passes or fails depending on placement. See
+  [`fpga/README.md`](fpga/README.md).
 
-Tests are RV32I assembly programs under `tests/isa/` (ISA correctness) and `tests/hazards/` (pipeline hazards and bypass). Each test includes `tests/common/test_macros.s` for `TEST_BEGIN`, `TEST_PASS`, `TEST_FAIL`, and `ASSERT_*` macros, and links with `tests/common/test_runtime.s` for stack init and print. Output goes to UART at `0x0002FFF8`; writing to `0x0002FFFC` halts the simulator.
+## Software
 
-- **`tests/isa/`** — add/sub, shifts, logic, compare, loads/stores (basic and sign-ext), LUI/AUIPC, branches (basic/signed/unsigned), jumps (JAL/JALR).
-- **`tests/hazards/`** — load-use stalls, load chains, branch-after-load/ALU, EX–EX and MEM–EX data hazards, bypass stress.
-- **`tests/riscv-tests/`** — the official [riscv-tests](https://github.com/riscv-software-src/riscv-tests) suite (submodule). The 40 `rv32ui` tests run two ways, and both pass:
-  - against a local environment (`tests/riscv-tests-env/riscv_test.h`) that reports through this project's MMIO registers, and
-  - against the suite's **stock `p` environment**, which reports through an `ECALL` trap handler and the `tohost` location — so it exercises `mtvec`/`mepc`/`mcause`/`ECALL`/`MRET` on every test. `tests/riscv-tests-env/link-p.ld` places `.tohost` at `0x0002FFC0`, which the tops treat as a halt.
+| Command | What |
+|---|---|
+| `make dhrystone` | Dhrystone for the board, built rv32i |
+| `make ipc` | A mixed workload that reads the performance counters, for the board |
+| `make run-sdram-hello` | A newlib C program running from SDRAM, in simulation |
 
-  `fence_i` and `ma_data` are excluded. The first needs self-modifying code, which a Harvard machine with a separate instruction memory cannot do. The second requires *emulating* misaligned accesses in a trap handler; this core takes the other behaviour the spec allows and traps on them.
+## Layout
 
-Run one test: `make run-test-<name>-iverilog` (e.g. `run-test-isa-add_sub-iverilog`). Run all: `make run-tests-iverilog`.
-
-Against real hardware (see `fpga/README.md`), `host/rv32_diff.py` additionally runs randomly generated programs on the FPGA and on `host/rv32_model.py`, a plain instruction-at-a-time RV32I interpreter, and compares all 30 general registers plus the scratch memory. Because the model has no pipeline, bypassing or hazard logic, it shares no structure with the RTL — which is what makes the comparison meaningful. This is how the `blt`/`bge` signed-overflow bug was found.
-
-## Formal verification
-
-`formal/` runs [riscv-formal](https://github.com/YosysHQ/riscv-formal) against
-the core through an RVFI commit port. **All 43 checks pass**: 37 per-instruction
-proofs covering RV32I, plus `reg`, `pc_fwd`, `pc_bwd`, `causal`, `unique` and
-`liveness`. See `formal/README.md`.
-
-Unlike the test suites, these reason about *every* operand value and every
-reachable pipeline state rather than the ones a test happened to pick.
-
-## Make Targets
-
-| Command | Description |
-|--------|-------------|
-| `make` or `make result-iverilog` | Build test program, build Icarus Verilog sim, run it (binary removed after run). |
-| `make build/sim/result-iverilog` | Build Icarus Verilog simulator only → `build/sim/result-iverilog`. |
-| `make result-verilator` | Build and run Verilator simulator (produces `result-verilator`). |
-| `make test` | Build `test` ELF and generate `*.hex` (code/data) in project root. |
-| `make run-test-<name>-iverilog` | Build ELF for `tests/<name>.s` (e.g. `isa/add_sub` → `run-test-isa-add_sub-iverilog`), run that test under Icarus. |
-| `make run-tests-iverilog` | Run all tests under `tests/isa/` and `tests/hazards/`. |
-| `make dhrystone` | Build the Dhrystone benchmark into `build/tests/bench/dhrystone/`. |
-| `make riscv-tests` | Build the official riscv-tests `rv32ui` suite into `build/riscv-tests/`. |
-| `make run-riscv-tests-iverilog` | Run the `rv32ui` suite under Icarus (local environment). |
-| `make run-riscv-tests-p-iverilog` | Run the same tests under the suite's **stock `p` environment**. |
-| `make rvfi-check` | Cross-check the RVFI commit record against `host/rv32_model.py` for every test. |
-| `make coverage` | Verilator line/toggle coverage over both suites; annotated output in `build/cov/annotated/`. |
-| `make clean` | Remove build artifacts, `*.hex`, `test`, sim binaries, `test.vcd`, `obj_dir/`. |
-
-**Note**: `result-iverilog` and `result-verilator` depend on `test`; ensure `test.c` and `start.s` are built and `elftohex.sh` has been run so `code*.hex` and `data*.hex` exist before simulating.
-
-## File reference
-
-| File | Description |
-|------|-------------|
-| **RTL (SystemVerilog)** | |
-| `itop.sv` | Icarus Verilog testbench: clk/reset/halt, includes `top.sv`. Waveforms are opt-in (`+vcd`), and a watchdog stops a runaway program (`+timeout=<cycles>`, default 500000). |
-| `top.sv` | Top-level: instantiates core + code memory + data memory; MMIO putchar/halt. |
-| `cpu.sv` | Pipeline core: modules `fetch`, `decode_and_writeback`, `execute`, `memory`, `writeback`, `control`. |
-| `riscv.sv` | Package wrapper; includes `riscv32_common.sv` (or 64-bit). |
-| `riscv32_common.sv` | RV32 types (tag, instr32, funct3/7, opcode), decode helpers, format enums. |
-| `base.sv` | Macros: `true`/`false`, `one`/`zero`; `bool` for Verilator. |
-| `system.sv` | Word/address sizes (`word_size`, `word_address_size`), `word` type. |
-| `memory_io.sv` | Structs `memory_io_req` / `memory_io_rsp` and byte-enable helpers. |
-| `memory.sv` | Parametric RAM: byte arrays, `$readmemh` from `code*.hex` / `data*.hex`. |
-| **Build & config** | |
-| `Makefile` | Builds dumphex, libmc, test ELF, hex files, iverilog/verilator sim; test targets. |
-| `site-config.sh` | Paths: `RISCV_PREFIX`, `RISCV_LIB`, `IVERILOG`, `VERILATOR`. |
-| `ld.script` | Linker script: `.text` at 0x10000, `.rodata`/`.data`/`.bss` at 0x20000. |
-| `elftohex.sh` | Converts ELF to `code*.hex` (text) and `data*.hex` (data) via objcopy + dumphex. |
-| `dumphex.c` | Host utility: reads binary, writes byte-wide hex files for memory init. |
-| **Test program (default)** | |
-| `start.s` | Assembly entry `_start`: sets stack, runs inline pipeline tests, then calls `main` and `halt`. |
-| `test.c` | C entry used by default `make`; linked with `start.s` and libmc. |
-| **Verilator** | |
-| `verilator_top.cpp` | Verilator testbench: drives clk/reset, runs until `halt`. |
-| **Tests (assembly)** | |
-| `tests/common/test_macros.s` | Macros: `TEST_BEGIN`, `TEST_PASS`, `TEST_FAIL`, `ASSERT_*`; UART/HALT/stack constants. |
-| `tests/common/test_runtime.s` | `init_stack`, `print_str`; linked into per-test ELFs. |
-| `tests/isa/*.s` | ISA tests: add_sub, shift, logic, compare, load/store, lui_auipc, branch_*, jump_jal_jalr. |
-| `tests/hazards/*.s` | Hazard tests: load_use, load_chain, branch_after_*, data_*_ex, bypass_stress. |
-| **libmc (C runtime)** | |
-| `libmc/Makefile` | Builds `libmc.a` from C sources and `mmio.s`. |
-| `libmc/libmc.h` | Declarations: printf, putc, puts, mmio_*, string/atoi helpers, halt. |
-| `libmc/base.h` | Types (e.g. `native_t`) and base defines. |
-| `libmc/mmio.s` | RV32I assembly: `mmio_read32`/`mmio_write32`, `mmio_read8`/`mmio_write8`. |
-| `libmc/*.c` | printf, putc, puts, halt, atoi, strlen, strcmp, strchr, strtok, memset, itoa/htoa/btoa, etc. |
+| Path | What |
+|---|---|
+| `rtl/core/` | The core: pipeline (`cpu.sv`), divider, ISA decode |
+| `rtl/bus/` | Address decoder, MMIO, instruction and data caches, SDRAM arbiter |
+| `rtl/mem/` | Memory interface and on-chip memories, plus a slow-memory wrapper for testing |
+| `rtl/top.sv` | Simulation top |
+| `sim/` | Icarus and Verilator harnesses, divider testbench |
+| `tests/` | riscv-tests (submodule), its linker script, cycle baseline |
+| `formal/` | riscv-formal harness |
+| `fpga/ice40/` | pico2-ice board top, UART loader, board-level simulation |
+| `firmware/` | RP2350 firmware that bridges USB to the FPGA |
+| `sw/` | Dhrystone, the IPC bench, a small C library, and the newlib runtime for SDRAM programs |
+| `tools/` | Host tool for the board, reference model, RVFI checker, random tester |

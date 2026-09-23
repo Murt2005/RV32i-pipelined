@@ -1,6 +1,11 @@
 # Formal verification
 
-## Toolchain (verified working)
+[riscv-formal](https://github.com/YosysHQ/riscv-formal) checks the core through
+an RVFI commit port. Unlike the test suites, the solver reasons about *every*
+operand value and every reachable pipeline state, not the ones a test happened
+to pick.
+
+## Toolchain
 
 ```bash
 brew install yices2 z3            # SMT solvers; yosys already provides yosys-smtbmc
@@ -18,97 +23,61 @@ all wired up.
 cd formal && sby -f smoke.sby      # expect FAIL with a counterexample trace
 ```
 
-## riscv-formal
+## Checks
 
-**Status: all 43 checks pass.** 37 per-instruction checks covering the whole of
-RV32I, plus the six consistency checks:
+`checks.cfg` targets RV32IM, which generates 51 checks:
 
 | Check | What it proves |
 |---|---|
-| `insn_*` (37) | each instruction matches the ISA model for *every* operand value and reachable pipeline state |
-| `reg` | a register read returns what was last written to it — i.e. the bypass network never lies |
-| `pc_fwd` / `pc_bwd` | consecutive instructions' PCs chain correctly — no instruction skipped, none executed twice |
+| `insn_*` (45) | each instruction matches the ISA model for every operand value and reachable pipeline state |
+| `reg` | a register read returns what was last written to it, so the bypass network never lies |
+| `pc_fwd` / `pc_bwd` | consecutive instructions' PCs chain correctly: none skipped, none run twice |
 | `causal` | an instruction never depends on a value produced after it |
-| `unique` | `rvfi_order` is strictly increasing — nothing retires twice |
-| `liveness` | the core always eventually retires an instruction — it cannot deadlock |
-
-`liveness` is the one worth calling out: every simulator wedge hit while
-building this (a combinational loop from the BTB training path, a stall that
-never cleared) was a violation of exactly that property, found the slow way.
+| `unique` | `rvfi_order` is strictly increasing, so nothing retires twice |
+| `liveness` | the core always eventually retires an instruction |
 
 ```bash
-brew install yices2                # solver
-git clone https://github.com/YosysHQ/sby /tmp/sby
-cd /tmp/sby && make install PREFIX=$HOME/.local
-export PATH=$HOME/.local/bin:$PATH
-
 cd formal
 make checks                        # generate the .sby files
 make list                          # what was generated
 make one CHECK=insn_addi_ch0       # a single check
-make run-insn                      # all 37 instruction checks
-make run                           # everything, including the slow ones
+make run-insn                      # the RV32I instruction checks
+make run-consistency               # reg, pc_fwd, pc_bwd, causal, unique, liveness
+make run-m                         # the eight M checks, which take hours
 ```
 
-Each `insn_*` check is a bounded proof that one instruction is implemented
-correctly for **every** operand value and **every** reachable pipeline state,
-rather than the handful a directed test happens to pick. That is the thing
-neither riscv-tests nor the random differential tester can give you.
+The M checks are kept out of `run-insn`. Multiply is an equivalence check
+between two multiplier structures, which SMT solvers handle badly, and divide
+needs depth 56 before an iterative divide can retire.
 
-### How it is wired
+**Status.** The checks haven't been rerun since the machine-mode CSR and trap
+changes. `liveness` has an open counterexample: with the external `stall`
+input asserted for one cycle while a `jal` is in fetch, the instruction stays
+latched and never retires. The pico2-ice drives `stall` for UART backpressure,
+so this matters on hardware.
+
+## How it is wired
 
 `yosys` cannot read this project's SystemVerilog, so `formal/Makefile` runs
 `sv2v` over `wrapper.sv` + `cpu.sv` first and points riscv-formal at the
-flattened result. `genchecks.py` derives its base directory from the working
-directory and expects a `<basedir>/cores/<core>/` layout, so the Makefile
-builds that layout in `formal/rf/` out of symlinks into the vendored
-riscv-formal rather than copying it.
+flattened result. `genchecks.py` expects a `<basedir>/cores/<core>/` layout, so
+the Makefile builds one in `formal/rf/` out of symlinks into the riscv-formal
+submodule.
 
-The RVFI port itself lives in `cpu.sv` behind `` `ifdef RVFI ``, so the
-synthesised build carries none of it. It is validated independently by
-`host/rvfi_check.py`, which replays every retired instruction through the
-reference model — worth doing first, because riscv-formal reasons entirely
-about what RVFI reports, and a wrong record yields confident nonsense in both
-directions.
+The RVFI port lives in `cpu.sv` behind `` `ifdef RVFI ``, so the synthesised
+build carries none of it. `make rvfi-check` validates it independently by
+replaying every retired instruction through `tools/rv32_model.py`. That's worth
+running first: riscv-formal reasons entirely about what RVFI reports, so a
+wrong record gives wrong answers in both directions.
 
-### The memory model
+## The environment
 
-`wrapper.sv` leaves the memory *data* free — that is the point, the solver
-picks whatever instruction stream exposes a violation. The *protocol* is
-constrained to match the real memories: a request presented in one cycle is
-answered the next, with the response echoing the address it was issued for.
-Without that the core would be judged against a memory no implementation has,
-and the pc-chain checks would fail on the environment rather than the design.
+`wrapper.sv` leaves memory *data* free, so the solver picks whatever
+instruction stream exposes a violation. Memory *timing* is also up to the
+solver: a request can be refused, and a response can arrive one or two cycles
+later, so the core's stall paths are checked too. The external `stall` input is
+driven by the solver as well.
 
-## Appendix: what RVFI needed
-
-The instrumentation that had to be added. riscv-formal drives its checks off
-an [RVFI](https://github.com/YosysHQ/riscv-formal/blob/main/docs/rvfi.md) port
-that reports, **at the commit point**, everything about the instruction that
-just retired. This core does not carry most of that to writeback yet.
-
-What already exists and what has to be plumbed:
-
-| RVFI signal | Status |
-|---|---|
-| `rvfi_valid` | `memory_instruction_out.is_instruction_valid` at writeback |
-| `rvfi_order` | new — a retire counter |
-| `rvfi_insn` | **missing past decode** — `decoded_instruction_t.instruction` stops at execute |
-| `rvfi_pc_rdata` | **missing** — `memory_instruction_t.pc` exists but is never assigned |
-| `rvfi_pc_wdata` | **missing** — `next_pc_comb` is not carried past execute |
-| `rvfi_rs1_addr` / `rs2_addr` | in `executed_instruction_t`, stops at memory |
-| `rvfi_rs1_rdata` / `rs2_rdata` | `executed_instruction_t.rd1/rd2` hold the *bypassed* values, which is what RVFI wants |
-| `rvfi_rd_addr` / `rd_wdata` | `writeback_instruction_t.wbs/wbd` |
-| `rvfi_trap` | `trap.taken` in execute, not carried |
-| `rvfi_mem_*` | address/masks exist in the memory stage; read data at writeback; none carried |
-| `rvfi_mode` / `rvfi_ixl` | constants (3, 1) — this core is M-mode RV32 only |
-
-So the work is: widen `memory_instruction_t` to carry pc, next-pc, insn, rs1/rs2
-and the memory access, assign the fields that are currently declared-but-unused,
-and expose a commit-point RVFI port from `core`. Roughly 150-250 lines of
-mechanical plumbing, then a `checks.cfg` against riscv-formal's `rv32i` model.
-
-Worth doing: it is the only technique here that reasons about *all* inputs
-rather than the ones a test happened to pick, and every bug found in this core
-so far has lived in an interaction (bypass against stall against redirect) that
-is exactly what bounded model checking is good at.
+All of this is bounded: at most two refusals or stalled cycles in a row. A
+memory that never answers really would deadlock the core, and `liveness` would
+then fail on the environment rather than the design.

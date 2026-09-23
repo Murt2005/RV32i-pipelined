@@ -4,11 +4,11 @@ The five-stage RV32I core from this repo, running on the pico2-ice's
 iCE40UP5K. Programs are loaded over USB at run time; one bitstream runs any
 program the normal build flow produces.
 
-Status: on hardware, all 21 tests under `tests/` pass with output byte-identical
-to the Icarus simulation, all 40 official `rv32ui` riscv-tests pass, and random
+Status: on hardware, all 40 official `rv32ui` riscv-tests pass, random
 programs match a reference model instruction for instruction — with the
-pipeline stalled pseudo-randomly as well as free-running. The core implements
-RV32I plus machine-mode CSRs and precise traps.
+pipeline stalled pseudo-randomly as well as free-running — and Dhrystone runs.
+The board build is RV32I plus machine-mode CSRs and precise traps; the M
+extension doesn't fit in the UP5K.
 
 ```
 Host PC ──USB──► RP2350 ──► iCE40UP5K
@@ -35,13 +35,12 @@ picotool load -x pico2_ice_rv32.uf2      # board must be in BOOTSEL
 cd fpga/ice40 && make prog
 
 # 3. run something
-python3 host/rv32_host.py --probe
-python3 host/rv32_host.py --elf build/tests/isa/add_sub.elf
-python3 host/rv32_host.py --regress       # all tests, diffed against simulation
-python3 host/rv32_host.py --riscv-tests   # official rv32ui suite (make riscv-tests first)
-python3 host/rv32_diff.py --iters 200     # random programs vs the reference model
-python3 host/rv32_diff.py --stall-rate 200   # ... with the pipeline stalled most cycles
-python3 host/rv32_host.py --bench build/tests/bench/ipc.elf   # measure IPC
+python3 tools/rv32_host.py --probe
+make riscv-tests riscv-tests-mi
+python3 tools/rv32_host.py --riscv-tests  # rv32ui and rv32mi, result read from tohost
+python3 tools/rv32_diff.py --iters 200    # random programs vs the reference model
+python3 tools/rv32_diff.py --stall-rate 200   # ... with the pipeline stalled most cycles
+make ipc && python3 tools/rv32_host.py --bench build/sw/bench/ipc.elf   # measure IPC
 ```
 
 After the first firmware flash you never need BOOTSEL again: opening the CDC
@@ -59,11 +58,11 @@ of `ice_fpga_start()`, which returns 0 unconditionally without polling CDONE.
 | `fpga/ice40/memory_spram.sv` | 64 KiB memory on two `SB_SPRAM256KA`, same `memory_io` interface as `memory.sv` |
 | `fpga/ice40/uart.sv` | 8N1 transmitter and receiver |
 | `fpga/ice40/rv32_top.pcf` | Pin constraints (iCE40 package pins) |
-| `fpga/ice40/sim/` | Board-level testbench: same RTL, behavioural SPRAM, UART host model |
+| `fpga/ice40/sim/` | Board-level testbench: behavioural SPRAM and a UART host model |
 | `firmware/main.c` | RP2350 bridge |
-| `host/rv32_host.py` | Loader / runner / regression driver |
-| `host/rv32_model.py` | Reference RV32I interpreter (no pipeline, shares no structure with the RTL) |
-| `host/rv32_diff.py` | Random program generator + differential test driver |
+| `tools/rv32_host.py` | Loader and test runner |
+| `tools/rv32_model.py` | Reference RV32I interpreter (no pipeline, shares no structure with the RTL) |
+| `tools/rv32_diff.py` | Random program generator + differential test driver |
 
 The core (`cpu.sv`) stays board-neutral. The only thing the board added to it
 is a generic `stall` input; everything else talks over the existing
@@ -90,12 +89,12 @@ XOSC straight through with divisor 1 and a clean 50% duty cycle. No fractional
 divider means no jitter on the FPGA's only clock, and 1 Mbaud is an exact /12
 of it, so both UART ends derive from the same crystal and cannot drift.
 
-Post-place-and-route fMax is 13.1 MHz, i.e. about 9% static margin. That is
-thinner than one would like, so the 12 MHz build is qualified on silicon —
-full regression, the rv32ui suite, and 200 randomised differential programs
-with the pipeline stalled — rather than on the timing estimate alone.
+**There is no timing margin left.** Post-place-and-route fMax now lands between
+about 11.6 and 12.7 MHz depending on placement, so a build can fail timing at
+12 MHz; rebuilding usually gets a passing placement. It was 13.1 MHz when the
+changes below were made, and the logic added since has used up the margin.
 
-Getting there took three changes to the critical path, which ran
+Getting to 13.1 MHz took three changes to the critical path, which ran
 writeback → bypass → ALU → next-PC → control:
 
 | Change | fMax |
@@ -114,8 +113,9 @@ once the logic depth came down from 50 levels to 22, at which point routing was
 `firmware/main.c`. The baud divisor is a synthesis-time constant, so a mismatch
 garbles bytes rather than producing silence.
 
-**Utilisation** (`nextpnr --up5k --package sg48`): 4695/5280 LC (88%),
-6/30 BRAM, 4/4 SPRAM, 13.1 MHz unconstrained vs a 12 MHz target.
+**Utilisation** (`nextpnr --up5k --package sg48`): 5251/5280 LC (99%),
+6/30 BRAM, 4/4 SPRAM. The complete machine-mode CSR and trap support took it
+from 92% to 99%, which is why the timing margin went with it.
 
 ## Performance
 
@@ -129,10 +129,10 @@ DMIPS            : 9.93
 DMIPS/MHz        : 0.827
 ```
 
-`make dhrystone && python3 host/rv32_host.py --dhrystone`.
+`make dhrystone && python3 tools/rv32_host.py --dhrystone`.
 
 The benchmark sources are copied unmodified from riscv-tests — a Dhrystone
-number is only comparable if the benchmark is. `tests/bench/dhrystone/port.c`
+number is only comparable if the benchmark is. `sw/bench/dhrystone/port.c`
 supplies what this bare-metal machine lacks (`strcpy`, `putchar`, a `main`),
 and `rv_env.h` replaces the riscv-tests `util.h`. Timing comes from the
 `mcycle` CSR, which `dhrystone.h` already selects for `__riscv` — that is why
@@ -141,8 +141,8 @@ the core now implements the machine counters.
 Built `-O2` with the benchmark's own no-inline pragma, which is the
 conventional Dhrystone build. For scale, published figures for soft cores on
 comparable parts run from roughly 0.25 DMIPS/MHz for a serial core up to about
-1.2 for a heavily pipelined one; this core is RV32I only, so integer multiply
-and divide go through libgcc.
+1.2 for a heavily pipelined one. The board build is RV32I only, so Dhrystone is
+built rv32i and integer multiply and divide go through libgcc.
 
 
 Two counters are readable as memory-mapped words while the core runs, zeroed
@@ -153,7 +153,7 @@ each time it is released:
 | `0x0002FFF0` | cycles elapsed |
 | `0x0002FFF4` | instructions committed |
 
-`tests/bench/ipc.s` runs a deliberately mixed workload — ALU, a load-use pair, a
+`sw/bench/ipc.s` runs a deliberately mixed workload — ALU, a load-use pair, a
 taken branch and a store — and stores both counters where the host can read them:
 
 ```
@@ -230,17 +230,20 @@ not-configured indication.
 
 ## Simulating the board build
 
-`fpga/ice40/sim` runs the *same* RTL that gets synthesized against a
-behavioural `SB_SPRAM256KA` and a UART host model, driving the real wire
-protocol.
+`make sim` in `fpga/ice40` runs the *same* RTL that gets synthesized, built
+without the M extension like the bitstream, against a behavioural
+`SB_SPRAM256KA` (in `fpga/ice40/sim/`) and a UART host model driving the real
+wire protocol. It loads each riscv-test, runs it, then reads the result back
+from `tohost` over the UART, the same way `rv32_host.py --riscv-tests` does.
 
 ```bash
-cd fpga/ice40/sim
-make run                        # tests/isa/add_sub
-make run TEST=hazards/load_use
-make run-all                    # all 19
-./tb_rv32_top +dbg              # per-character trace
+cd fpga/ice40
+make sim                          # rv32ui and rv32mi
+make sim TEST=riscv-tests/add     # one test
 ```
+
+For a per-character trace, run `fpga/ice40/build/tb_rv32_top +dbg` from that
+test's `build/hex/ice40/<test>/` directory.
 
 Crucially it holds `reset_n` **high for all time**, which is what the board
 does. Every testbench in the repo root pulses reset at t=0, which makes a
@@ -293,8 +296,7 @@ bit 31, which is the sign of the *truncated* difference and is wrong whenever
 the signed subtraction overflows. Bit 32 is the unsigned borrow, so signed
 less-than is that xor'd with both operand sign bits. `blt.S` in riscv-tests
 only uses operands in -2..1, where the subtraction can never overflow, so the
-official suite passes with the bug present. `tests/isa/branch_signed.s` now
-covers it directly.
+official suite passes with the bug present.
 
 **Stall injection.** `stall` is otherwise only ever driven by transmit-queue
 backpressure, which is tied to how often the program prints and so barely
@@ -310,8 +312,7 @@ clean. SPRAM and the block-RAM register file both keep their contents across
 runs, so `Z` clears both. Note the register file's write port has to stay a
 *single* muxed site: writing the array from two separate conditions infers a
 second write port, which a 1W1R block RAM cannot provide, and the design stops
-fitting. `hazards/branch_after_load`
-asserts that a location its own program never writes is still zero — it passed
-in simulation and failed on hardware purely because of the previous test's
-leftovers. Hence the `Z` command, which clears both memories in 16384 cycles
+fitting. A test that checked a location its own program never writes was still
+zero passed in simulation and failed on hardware purely because of the previous
+test's leftovers. Hence the `Z` command, which clears both memories in 16384 cycles
 (~2.7 ms).
