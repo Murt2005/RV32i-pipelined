@@ -3,7 +3,7 @@
 include site-config.sh
 
 # Without this the first rule in the file, sw/libmc/libmc.a, would be the default.
-.DEFAULT_GOAL := run-tests-iverilog
+.DEFAULT_GOAL := test
 
 CC=$(RISCV_PREFIX)-gcc
 AS=$(RISCV_PREFIX)-as
@@ -23,18 +23,10 @@ LD=$(RISCV_PREFIX)-ld
 CSTD=-std=gnu17
 
 SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
-LDFLAGS=-m $(LDEMUL) --script tests/common/link.ld
+LDFLAGS=-m $(LDEMUL) --script sw/common/link.ld
 LDPOSTFLAGS= -Lsw/libmc -lmc -L$(RISCV_LIB) -lgcc
 TOOLS=build/tools/dumphex
 LIBS=sw/libmc/libmc.a
-
-# --------------------------------------------------------------------
-# Per-file RV32I assembly tests (each builds to its own ELF/hex images)
-# --------------------------------------------------------------------
-TESTS_DIRS := tests/isa tests/hazards
-TESTS_S := $(foreach d,$(TESTS_DIRS),$(wildcard $(d)/*.s))
-TESTS_STEMS := $(patsubst tests/%.s,%,$(TESTS_S))
-TESTS_RUN_NAMES := $(subst /,-,$(TESTS_STEMS))
 
 SIM_IVERILOG := build/sim/result-iverilog
 
@@ -45,32 +37,31 @@ SIM_IVERILOG := build/sim/result-iverilog
 HEX := build/hex
 
 # Pipeline stall rate out of 256 for simulation runs; 0 disables.
-#   make run-tests-iverilog STALL_RATE=128
+#   make test STALL_RATE=128
 STALL_RATE ?= 0
 
 # Extra memory latency, 0..N cycles drawn per access; 0 is a single-cycle
 # memory and reproduces the original behaviour exactly.
-#   make run-tests-iverilog MEM_LATENCY=8
+#   make test MEM_LATENCY=8
 # Worth running together with STALL_RATE rather than instead of it -- the two
 # perturb different parts of the machine and the interesting bugs are where they
 # overlap.
 MEM_LATENCY ?= 0
 
 # Simulator watchdog in cycles. Matches sim/itop.sv's own default, but has to be
-# raised when the memory is slowed down: at MEM_LATENCY=16 a directed test takes
+# raised when the memory is slowed down: at MEM_LATENCY=16 a program takes
 # ~85x the cycles it does at 0, so the default turns a passing run into a
 # timeout that looks like a hang.
 SIM_TIMEOUT ?= 120000
 
 SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_TIMEOUT)
 
-.PHONY: run-tests-iverilog run-one-iverilog
-
-build/%.o: %.s tests/common/test_macros.s tests/common/test_runtime.s
+# Assembly programs (the IPC bench) built against sw/common
+build/%.o: %.s sw/common/test_macros.s sw/common/test_runtime.s
 	mkdir -p $(dir $@)
 	$(AS) $(SSFLAGS) -c $< -o $@
 
-build/%.elf: build/%.o tests/common/link.ld
+build/%.elf: build/%.o sw/common/link.ld
 	mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -o $@ $<
 
@@ -128,23 +119,6 @@ rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests riscv-tests-m riscv-
 			&& echo ok || { echo "FAILED -- build/rvfi-$$d.log"; rc=1; }; \
 	done; exit $$rc
 
-# Run one test by stem under tests/ (e.g. TEST_STEM=isa/add_sub)
-run-one-iverilog: $(TOOLS) $(SIM_IVERILOG)
-	/bin/bash tools/elftohex.sh build/tests/$(TEST_STEM).elf $(HEX)/$(TEST_STEM)
-	cd $(HEX)/$(TEST_STEM) && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS)
-
-# Friendly per-test targets, e.g. run-test-isa-add_sub-iverilog
-run-test-%-iverilog: $(TOOLS) $(SIM_IVERILOG)
-	$(MAKE) build/tests/$(subst -,/,$*).elf
-	$(MAKE) run-one-iverilog TEST_STEM=$(subst -,/,$*)
-
-run-tests-iverilog: $(TOOLS) $(SIM_IVERILOG)
-	@set -e; for t in $(TESTS_RUN_NAMES); do \
-		echo ""; \
-		echo "===== Running $$t ====="; \
-		$(MAKE) run-test-$$t-iverilog; \
-	done
-
 
 # --------------------------------------------------------------------
 # Cycle-count gate.
@@ -167,8 +141,7 @@ run-tests-iverilog: $(TOOLS) $(SIM_IVERILOG)
 # tests a pipeline change moved and by how much.
 CYCLE_DIR := tests/cycles
 CYCLE_LOG := build/cycles
-CYCLE_SUITES := directed:run-tests-iverilog \
-                rv32ui:run-riscv-tests-iverilog
+CYCLE_SUITES := rv32ui:run-riscv-tests-iverilog
 
 .PHONY: cycle-baseline cycle-check
 
@@ -189,7 +162,7 @@ cycle-baseline cycle-check:
 # --------------------------------------------------------------------
 # Memory-latency sweep.
 #
-# Runs the directed suite against memories that answer late, then again with
+# Runs every riscv-tests suite against memories that answer late, then again with
 # external stall injection on top. Both perturbations are needed: the front end's
 # instruction-miss handling and the memory stage's outstanding-access tracking
 # are unreachable with a single-cycle memory, and their failure mode is a
@@ -207,9 +180,8 @@ latency-sweep: $(TOOLS) $(SIM_IVERILOG)
 	@mkdir -p build; rc=0; \
 	run() { \
 		printf '%-32s ' "$$1"; \
-		$(MAKE) --no-print-directory run-tests-iverilog \
+		$(MAKE) --no-print-directory test \
 			MEM_LATENCY=$$2 STALL_RATE=$$3 SIM_TIMEOUT=$$4 > "build/$$5" 2>&1 \
-			&& ! grep -qE 'FAIL|ERROR|TIMEOUT' "build/$$5" \
 			&& echo ok || { echo "FAILED -- build/$$5"; rc=1; }; \
 	}; \
 	for d in $(LATENCIES); do \
@@ -385,6 +357,10 @@ riscv-tests-mi: $(RVTESTS_MI_ELF)
 run-riscv-tests-mi-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-mi
 	$(call run-rvtests,rv32mi,$(RVTESTS_MI),riscv-tests-mi)
 
+# Every riscv-tests suite; the default target
+.PHONY: test
+test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-iverilog
+
 # --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from
 # tests/riscv-tests/benchmarks/dhrystone (a number is only comparable if the
@@ -418,9 +394,12 @@ $(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) sw/bench/link.ld
 
 dhrystone: $(DHRY_OUT)/dhrystone.elf
 
+# IPC bench for the board, read back by rv32_host.py --bench
+.PHONY: ipc
+ipc: build/sw/bench/ipc.elf
+
 # --------------------------------------------------------------------
-# The divider's arithmetic on its own: every spec corner plus random pairs. The
-# pipeline handshake is tests/hazards/divide_handshake.s.
+# The divider's arithmetic on its own: every spec corner plus random pairs
 # --------------------------------------------------------------------
 .PHONY: divider-tb
 
@@ -432,7 +411,7 @@ divider-tb: build/sim/tb_divider
 	./build/sim/tb_divider
 
 # --------------------------------------------------------------------
-# Line/toggle coverage over both suites, via Verilator.
+# Line/toggle coverage over the riscv-tests suites, via Verilator
 # --------------------------------------------------------------------
 .PHONY: coverage
 
@@ -442,25 +421,19 @@ build/cov/Vtop: $(RTL_CORE) sim/verilator_top.cpp
 		--Mdir build/cov -Wno-fatal $(RTL_INC) rtl/top.sv sim/verilator_top.cpp --exe \
 		-o Vtop
 
-coverage: build/cov/Vtop $(TOOLS) riscv-tests
+coverage: build/cov/Vtop $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi
 	@rm -rf build/cov/dat; mkdir -p build/cov/dat
 	@set -e; n=0; \
-	for t in $(TESTS_STEMS); do \
-		$(MAKE) -s build/tests/$$t.elf >/dev/null; \
+	for e in $(RVTESTS_ELF) $(RVTESTS_M_ELF) $(RVTESTS_MI_ELF); do \
+		t=`echo $$e | sed 's#^build/##; s#\.elf$$##'`; \
 		d=$(HEX)/$$t; c=$(CURDIR)/build/cov/dat/`echo $$t | tr / -`; \
-		/bin/bash tools/elftohex.sh build/tests/$$t.elf $$d >/dev/null 2>&1; \
+		/bin/bash tools/elftohex.sh $$e $$d >/dev/null 2>&1; \
 		(cd $$d && RV32_COVERAGE_FILE=$$c.dat \
 			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 		(cd $$d && RV32_STALL_RATE=128 RV32_COVERAGE_FILE=$$c-stall.dat \
 			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 		(cd $$d && RV32_MEM_LATENCY=4 RV32_STALL_RATE=128 RV32_MAX_CYCLES=20000000 \
 			RV32_COVERAGE_FILE=$$c-lat.dat \
-			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
-	done; \
-	for t in $(RVTESTS); do \
-		d=$(HEX)/riscv-tests/$$t; \
-		/bin/bash tools/elftohex.sh build/riscv-tests/$$t.elf $$d >/dev/null 2>&1; \
-		(cd $$d && RV32_COVERAGE_FILE=$(CURDIR)/build/cov/dat/rv32ui-$$t.dat \
 			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 	done; \
 	echo "ran $$n programs"

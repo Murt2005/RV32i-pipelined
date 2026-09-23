@@ -14,10 +14,10 @@ core's mcycle CSR, because that works for every test including the ones that
 never read a counter, and it costs nothing to collect.
 
     # record a baseline
-    make run-tests-iverilog | python3 tools/cycle_report.py --save build/cycles-base.json
+    make run-riscv-tests-iverilog | python3 tools/cycle_report.py --save build/cycles-base.json
 
     # after a change, compare
-    make run-tests-iverilog | python3 tools/cycle_report.py --compare build/cycles-base.json
+    make run-riscv-tests-iverilog | python3 tools/cycle_report.py --compare build/cycles-base.json
 """
 
 import argparse
@@ -29,9 +29,9 @@ import sys
 # $finish reports picoseconds.
 PS_PER_CYCLE = 10_000
 
-# Two log shapes. The directed suite prints a banner and lets the simulator's own
-# output through, so the name precedes the $finish:
-#     === tests/isa/add_sub ===
+# Two log shapes. A banner followed by the simulator's own output, where the name
+# precedes the $finish:
+#     === add ===
 #     sim/itop.sv:78: $finish called at 15640000 (1ps)
 # The riscv-tests runners swallow the simulator output and print one line per
 # test, so the runner re-emits the timestamp itself:

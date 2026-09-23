@@ -22,11 +22,11 @@ every iteration so even a branch landing past its initialisation exits within
 eight passes, and JALR targets are absolute offsets from a reserved base
 register so they cannot escape the program.
 
-Why this finds things the directed tests cannot: the hand-written tests and
-even riscv-tests exercise instructions in patterns a human chose. The bugs left
-in a pipelined core live in *interactions* -- a particular bypass source
-landing on a particular stall cycle next to a particular branch. Random
-sequences hit those combinations without anyone having to imagine them.
+Why this finds things riscv-tests cannot: riscv-tests exercise instructions in
+patterns a human chose. The bugs left in a pipelined core live in
+*interactions* -- a particular bypass source landing on a particular stall
+cycle next to a particular branch. Random sequences hit those combinations
+without anyone having to imagine them.
 
     python3 tools/rv32_diff.py                       # 50 programs, on hardware
     python3 tools/rv32_diff.py --sim --iters 100     # no hardware needed
@@ -172,7 +172,7 @@ def gen_program(rng, body_len):
             # MUL/MULH/MULHSU/MULHU/DIV/DIVU/REM/REMU. x0 is in rd_regs, so
             # roughly one in thirty of these divides by zero -- a defined result
             # rather than a trap, and one an implementation can easily get wrong.
-            # The signed-overflow corner, INT_MIN / -1, is left to the directed
+            # The signed-overflow corner, INT_MIN / -1, is left to the
             # rv32um tests: it needs two specific operand values that random
             # 32-bit registers will essentially never produce together.
             return r_type(0x01, rs2, rs1, rng.randrange(0, 8), rd, 0x33)

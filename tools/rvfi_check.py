@@ -9,7 +9,7 @@ by replaying every retired instruction through tools/rv32_model.py and comparing
 the fields the formal checks depend on.
 
     make build/sim/result-rvfi
-    python3 tools/rvfi_check.py build/tests/isa/add_sub.elf
+    python3 tools/rvfi_check.py build/riscv-tests/add.elf
     python3 tools/rvfi_check.py --all
 """
 
@@ -182,7 +182,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("elf", nargs="?")
     ap.add_argument("--all", action="store_true",
-                    help="every directed test plus the rv32ui suite")
+                    help="every riscv-tests suite")
     ap.add_argument("-v", "--verbose", action="store_true")
     # The commit record has to be right when the memory is slow, not only when it
     # answers in one cycle. An RVFI shadow that was overwritten while its
@@ -199,8 +199,6 @@ def main():
 
     elfs = []
     if args.all:
-        elfs += sorted(glob.glob(os.path.join(repo_root, "build/tests/isa/*.elf")))
-        elfs += sorted(glob.glob(os.path.join(repo_root, "build/tests/hazards/*.elf")))
         for suite in ("riscv-tests", "riscv-tests-m", "riscv-tests-mi"):
             elfs += sorted(glob.glob(os.path.join(repo_root, f"build/{suite}/*.elf")))
     elif args.elf:

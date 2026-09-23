@@ -4,7 +4,7 @@
 # end cover the whole program. Both are stored to RESULT_ADDR where the host
 # picks them up with the loader's read command.
 
-.include "tests/common/test_macros.s"
+.include "sw/common/test_macros.s"
 
 .set RESULT_ADDR, 0x00021800
 .set ITERS, 2000
@@ -45,4 +45,4 @@ cont:
 
     HALT
 
-.include "tests/common/test_runtime.s"
+.include "sw/common/test_runtime.s"
