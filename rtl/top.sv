@@ -16,15 +16,6 @@ module top #(
    output logic frame_done,
    input  logic key_strobe,
    input  logic [8:0] key_event
-`ifdef BOARD_TOP
-   , output memory_io_req sdram_req_o
-   , input  memory_io_rsp sdram_rsp_i
-   , input  logic         fb_rd_clk
-   , input  logic [16:0]  fb_rd_addr
-   , output logic [7:0]   fb_rd_data
-   , input  logic [7:0]   pal_rd_addr
-   , output logic [23:0]  pal_rd_data
-`endif
    );
 
 logic [15:0] stall_lfsr;
@@ -144,19 +135,6 @@ memory_delay #(
     ,.rsp(d_dmem_rsp)
     );
 
-`ifdef BOARD_TOP
-fb_ram #(
-    .bytes(32'h0001_0000)
-    ) fb_mem (
-    .clk(clk)
-    ,.reset(reset)
-    ,.req(d_fb_req)
-    ,.rsp(d_fb_rsp)
-    ,.rd_clk(fb_rd_clk)
-    ,.rd_addr(fb_rd_addr)
-    ,.rd_data(fb_rd_data)
-    );
-`else
 memory_delay #(
     .size(32'h0001_0000)
     ,.enable_rsp_addr(true)
@@ -167,7 +145,6 @@ memory_delay #(
     ,.req(d_fb_req)
     ,.rsp(d_fb_rsp)
     );
-`endif
 
 memory_io_req sdram_req;
 memory_io_rsp sdram_rsp;
@@ -200,10 +177,6 @@ bus_arbiter sdram_arb(
     .t_req(sdram_req),  .t_rsp(sdram_rsp)
 );
 
-`ifdef BOARD_TOP
-assign sdram_req_o = sdram_req;
-assign sdram_rsp   = sdram_rsp_i;
-`else
 memory_delay #(
     .size(sdram_bytes)
     ,.initialize_mem(true)
@@ -219,7 +192,6 @@ memory_delay #(
     ,.req(sdram_req)
     ,.rsp(sdram_rsp)
     );
-`endif
 
 logic        putchar_valid;
 logic [7:0]  putchar_data;
@@ -245,10 +217,6 @@ mmio mmio_m(
 
 logic [23:0] palette [0:255] /*verilator public_flat_rw*/;
 
-`ifdef BOARD_TOP
-always_ff @(posedge fb_rd_clk)
-    pal_rd_data <= palette[pal_rd_addr];
-`endif
 always @(posedge clk)
     if (palette_valid) palette[palette_index] <= palette_rgb;
 
