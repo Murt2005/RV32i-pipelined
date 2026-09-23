@@ -1,24 +1,5 @@
-// riscv-formal wrapper for the RV32I pipelined core.
-//
-// The memory *data* is left free, which is the whole point: the solver picks
-// whatever instruction stream and load values expose a violation. The memory
-// *protocol* is constrained to match what a real target may do, and that is now
-// wider than it used to be: this modelled a fixed one-cycle memory that always
-// accepted, because that is what memory.sv and memory_spram.sv do.
-//
-// That is no longer good enough. The core now has stall paths for a memory that
-// answers late or refuses a request, and against a memory that does neither
-// those paths are unreachable -- every check would still pass and would prove
-// nothing whatsoever about them. So the model here refuses requests and delays
-// responses under the solver's control, and the fast single-cycle case is just
-// one of the behaviours it can choose.
-//
-// Both are bounded structurally rather than by assumption, so `liveness` stays a
-// statement about the core rather than about the environment: a response is at
-// most one cycle late, and a refusal cannot repeat more than twice before ready
-// is forced high. A memory allowed to never answer really does deadlock the
-// core, and that would be a true counterexample about an environment no
-// implementation has.
+// riscv-formal wrapper: memory data is free, and memory and stall timing are chosen by the solver
+// Delays and refusals are bounded so liveness can't fail just because the environment never answers
 
 `include "system.sv"
 `include "memory_io.sv"
@@ -29,7 +10,7 @@ module rvfi_wrapper (
     input         reset,
     `RVFI_OUTPUTS
 );
-    // Free: the solver drives these.
+    // Free: the solver drives these
     (* keep *) `rvformal_rand_reg [31:0] imem_rdata;
     (* keep *) `rvformal_rand_reg [31:0] dmem_rdata;
 
@@ -48,59 +29,17 @@ module rvfi_wrapper (
     assign dmem_valid = data_req.valid;
     assign dmem_wstrb = data_req.do_write;
 
-    // On the eight M checks in checks.cfg. Both halves are excluded from the
-    // default run, for different reasons, and `make run-insn` skips them.
-    //
-    // Multiply is intractable, not slow. insn_mul asks the solver to prove that
-    // this core's 33x33 signed multiplier agrees with the model's, for every
-    // operand pair -- an equivalence check between two multiplier structures,
-    // which is the textbook hard case for SAT and SMT. Measured here: yices sat
-    // on a single BMC step for over thirty-five minutes without returning.
-    // Waiting longer is not a strategy; multipliers are verified by dedicated
-    // equivalence checking, not by bounded model checking, and every practical
-    // core does it that way.
-    //
-    // Divide is merely expensive. The unit is iterative and takes about
-    // thirty-five cycles, so the instruction cannot retire inside the depth the
-    // other checks use, and a check that cannot reach the retirement it is
-    // asserting about passes vacuously rather than failing. Depth 56 makes them
-    // reachable and correspondingly slow.
-    //
-    // The divider's arithmetic does not rest on them. It has a standalone
-    // testbench covering every case the spec defines as a result rather than a
-    // trap, both rounding directions, the wide divisors that overflow a 32-bit
-    // shifted remainder, and four hundred random pairs; the rv32um suite; and
-    // random differential testing against the reference model. What formal adds
-    // here is the handshake around it -- that a divide cannot be started twice,
-    // lost, or have its parked result collected by the wrong instruction -- and
-    // the multiply checks, which are combinational and cheap.
+    // The M checks are left out of make run-insn: multiply is intractable for the solver,
+    // and divide needs depth 56 to reach retirement (they run under make run-m)
 
-    // The depths in checks.cfg were raised to suit this. An access can now take
-    // two cycles rather than always one, and a request can be refused, so an
-    // instruction sits in the pipeline longer and depths sized for a one-cycle
-    // memory no longer reach the state being checked. That failure mode is a
-    // check that passes without proving anything, which is worse than one that
-    // fails. genchecks.py rejects comments inside its sections, hence this here.
+    // checks.cfg depths are sized for the slower memory (genchecks.py won't allow comments there)
 
-    // Solver-controlled refusal and response delay, one set per port.
+    // Solver-controlled refusal and response delay, one set per port
     (* keep *) `rvformal_rand_reg       inst_rand_ready, data_rand_ready;
     (* keep *) `rvformal_rand_reg       inst_rand_delay, data_rand_delay;
 
-    // ------------------------------------------------------------------
-    // A variable-latency memory target.
-    //
-    // Accepts at most one access. On acceptance it echoes the address back with
-    // the response, which fetch relies on to tell a wanted response from one it
-    // has redirected away from. Latency is 1 or 2 cycles: one is the old
-    // behaviour and has to stay reachable so the fast path keeps its coverage,
-    // and two is enough to exercise every new stall arm, including the extra
-    // cycle fetch holds across the arrival of a late response. Wider ranges cost
-    // proof depth exponentially and add no new behaviour -- the arms are the
-    // same whether a response is two cycles late or ten.
-    //
-    // ready is forced high after two consecutive refusals. Structural rather
-    // than an assumption so that liveness cannot fail on the environment.
-    // ------------------------------------------------------------------
+    // Memory target: one access at a time, 1 or 2 cycles of latency, address echoed back
+    // ready is forced high after two refusals in a row
     `define MEM_TARGET(NAME, REQ, RSP, RDATA, RAND_READY, RAND_DELAY)          \
         logic NAME``_busy;                                                     \
         logic [1:0] NAME``_refuse;                                             \
@@ -142,21 +81,7 @@ module rvfi_wrapper (
             RSP.ready = NAME``_ready;                                          \
         end
 
-    // ------------------------------------------------------------------
-    // The external stall input, driven by the solver.
-    //
-    // This was tied to zero, which left the whole path uncovered -- and it is
-    // not an obscure one. On the board it is transmit-queue backpressure, it
-    // freezes fetch, decode and execute while memory and writeback drain, and
-    // the fetch realign it interacts with has already produced one silently
-    // wrong execution in this core's history. A proof that never asserts it
-    // says nothing about any of that.
-    //
-    // Bounded structurally rather than by an assumption: at most two stalled
-    // cycles in a row. A stall that can be held forever really does stop the
-    // core retiring, so `liveness` would fail on the environment rather than on
-    // the design, and that is not a useful counterexample.
-    // ------------------------------------------------------------------
+    // External stall from the solver, at most two cycles in a row so the core keeps retiring
     (* keep *) `rvformal_rand_reg stall_rand;
 
     logic [1:0] stall_run;

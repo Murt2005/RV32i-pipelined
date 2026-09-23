@@ -1,23 +1,14 @@
-# riscv-formal harness for the RV32I pipelined core.
-#
-#   make checks     generate the .sby files
-#   make run        run them all (slow; see `make list`)
-#   make run-insn   just the per-instruction checks
-#   make CHECK=reg_ch0 one
-#
-# genchecks.py derives its base directory from the working directory and
-# expects a <basedir>/cores/<core>/ layout, so `rf/` below is that layout built
-# out of symlinks into the vendored riscv-formal rather than a copy of it.
+# riscv-formal checks for the core
+# make run-insn, make run-consistency, make run-m, or make one CHECK=reg_ch0
 
 ROOT     := ..
 RTL      := $(ROOT)/rtl
+# rf/ is the cores/<core> layout genchecks.py expects, built from symlinks
 BASEDIR  := rf
 CORE     := rv32
 CHECKDIR := $(BASEDIR)/cores/$(CORE)
 
-# SYNTHESIS drops the core's simulation-only memory_io protocol checkers. They
-# are $error-based, which means nothing to a solver, and their state would only
-# widen the search space -- the formal checks make the stronger statement anyway.
+# SYNTHESIS drops the $error protocol checkers, which mean nothing to a solver
 SV2V_DEFS := -DRVFI -DRISCV_FORMAL -DRISCV_FORMAL_NRET=1 \
              -DRISCV_FORMAL_XLEN=32 -DRISCV_FORMAL_ILEN=32 \
              -DRISCV_FORMAL_ALIGNED_MEM -DSYNTHESIS
@@ -25,8 +16,7 @@ SV2V_INC  := -I$(RTL)/core -I$(RTL)/mem -I. -Iriscv-formal/checks
 
 .PHONY: checks run run-insn list clean one
 
-# yosys cannot read the core's SystemVerilog, so flatten wrapper + core first
-# and point riscv-formal at the result.
+# yosys can't read the core's SystemVerilog, so sv2v flattens wrapper and core first
 $(ROOT)/build/formal/rvfi_top.v: wrapper.sv $(wildcard $(RTL)/core/*.sv) \
                                  $(RTL)/mem/memory_io.sv
 	mkdir -p $(ROOT)/build/formal
@@ -52,24 +42,11 @@ one: checks
 run: checks
 	$(MAKE) -C $(CHECKDIR)/checks -j4
 
-# The eight M checks are excluded here and run by `make run-m` instead. Multiply
-# is an equivalence check between two multiplier structures, which is the hard
-# case for SMT -- yices did not return on a single step in thirty-five minutes.
-# Divide needs depth 56 for a thirty-five cycle iterative unit. See wrapper.sv.
+# The M checks are slow or intractable, so they only run under make run-m
 M_CHECKS := insn_(mul|mulh|mulhsu|mulhu|div|divu|rem|remu)_
 
-# Read the verdict out of the status file, never from sby's exit code.
-#
-# riscv-formal generates every .sby with `expect pass,fail`, which tells sby that
-# a failing property is an anticipated outcome rather than an error -- so sby
-# exits 0 whether the check passed or produced a counterexample. Deciding PASS
-# from `sby && echo PASS` therefore reports every failure as a pass, silently,
-# and this file did exactly that until a liveness counterexample turned up
-# labelled PASS. The status file is the only honest source.
-#
-# ERROR is kept distinct from FAIL on purpose: a check that could not run (a
-# missing rvfi_top.v, a solver that died) is a broken harness, not a broken
-# core, and the two need different responses.
+# Take the verdict from the status file: sby exits 0 even when a check fails
+# ERROR means the harness broke, not the core
 define run_check
 	n=`basename $$c .sby`; printf "%-24s " $$n; \
 	sby -f $$c > /dev/null 2>&1; \
@@ -86,16 +63,13 @@ run-insn: checks
 		$(run_check); \
 	done
 
-# The expensive ones, on their own. Expect this to take hours, and expect the
-# multiply checks not to finish at all.
+# Expect hours, and the multiply checks not to finish
 run-m: checks
 	@cd $(CHECKDIR)/checks && for c in `ls insn_*.sby 2>/dev/null | grep -E '$(M_CHECKS)'`; do \
 		$(run_check); \
 	done
 
-# The consistency checks -- everything that is not a per-instruction check.
-# These were only ever run by hand, which is part of why a liveness failure sat
-# unnoticed; having a target means they run the same way every time.
+# Everything that isn't a per-instruction check
 run-consistency: checks
 	@cd $(CHECKDIR)/checks && for c in `ls *.sby 2>/dev/null | grep -v '^insn_'`; do \
 		$(run_check); \
