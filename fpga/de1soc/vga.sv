@@ -1,33 +1,8 @@
-// VGA scanout for the DE1-SoC's ADV7123 video DAC.
-//
-// 640x480@60 timing, with Doom's 320x200 framebuffer pixel-doubled to 640x400
-// and letterboxed into the middle. 640x480 rather than a mode that fits 320x200
-// exactly because every monitor made in the last thirty years syncs to it
-// without argument, and bring-up should not also be a display-compatibility
-// exercise.
-//
-// The framebuffer is read on its second port at the pixel clock while the CPU
-// writes the first at 50 MHz. M10K blocks support independent clocks per port
-// natively, so this is a dual-port memory rather than a clock-domain crossing:
-// there is no handshake here and none is needed. Reading a location the CPU is
-// writing in the same cycle yields old or new data, never a corrupt byte, and
-// the visible consequence is a pixel that is one frame stale.
-//
-// Two pipeline stages sit between deciding to read a pixel and driving it:
-//
-//   cycle 0   fb_addr driven from the counters
-//   cycle 1   fb_index arrives; drives pal_addr
-//   cycle 2   pal_rgb arrives; drives the DAC
-//
-// so hs, vs and blank are delayed by the same two cycles. Getting that wrong
-// does not produce a broken picture -- it produces a picture shifted two pixels
-// left with a two-pixel colour fringe at the edges, which is exactly the kind
-// of thing that gets blamed on the monitor for a week.
+// 640x480@60 VGA scanout, with the 320x200 framebuffer doubled and letterboxed
+// Framebuffer then palette reads take two cycles, so sync and blank are delayed to match
 
 module vga #(
-    // 640x480@60. The nominal pixel clock is 25.175 MHz; 25.0 MHz is 0.7% slow
-    // and every monitor tolerates it. The DE1-SoC's PLL can make 25.175 exactly
-    // if some display ever objects.
+    // 640x480@60; 25.0 MHz instead of 25.175 is close enough for any monitor
     parameter int h_visible = 640,
     parameter int h_front   = 16,
     parameter int h_sync    = 96,
@@ -44,15 +19,14 @@ module vga #(
     input  logic        clk,          // pixel clock, 25 MHz
     input  logic        reset,
 
-    // Framebuffer port B. One cycle of read latency.
+    // Framebuffer and palette reads each take one cycle
     output logic [16:0] fb_addr,
     input  logic [7:0]  fb_index,
 
-    // Palette lookup. One cycle of read latency.
     output logic [7:0]  pal_addr,
     input  logic [23:0] pal_rgb,      // {R[7:0], G[7:0], B[7:0]}
 
-    // To the ADV7123.
+    // To the ADV7123
     output logic [7:0]  vga_r,
     output logic [7:0]  vga_g,
     output logic [7:0]  vga_b,
@@ -61,14 +35,14 @@ module vga #(
     output logic        vga_blank_n,
     output logic        vga_sync_n,
 
-    // For the CPU side: one pulse per frame, in the pixel domain.
+    // One pulse per frame
     output logic        vsync_pulse
 );
 
     localparam int H_TOTAL = h_visible + h_front + h_sync + h_back;   // 800
     localparam int V_TOTAL = v_visible + v_front + v_sync + v_back;   // 525
 
-    // 320x200 doubled is 640x400, centred in 480 lines.
+    // 320x200 doubled is 640x400, centred in 480 lines
     localparam int V_IMAGE  = fb_h * 2;                 // 400
     localparam int V_MARGIN = (v_visible - V_IMAGE) / 2; // 40
 
@@ -90,7 +64,7 @@ module vga #(
         end
     end
 
-    // ---- stage 0: where in the framebuffer this pixel comes from ----------
+    // Stage 0: framebuffer address for this pixel
     wire h_active = (hcnt < HW'(h_visible));
     wire v_active = (vcnt < VW'(v_visible));
     wire in_image = h_active
@@ -100,19 +74,15 @@ module vga #(
     wire [8:0] fb_x = hcnt[HW-1:1];                        // /2, 0..319
     wire [7:0] fb_y = 8'((vcnt - VW'(V_MARGIN)) >> 1);     // /2, 0..199
 
-    // 320 is not a power of two, so this is a real multiply. Written as
-    // shift-and-add rather than `*` because the DE1-SoC has DSP blocks but
-    // there is no reason to spend one on a constant: 320y = 256y + 64y.
+    // 320y = 256y + 64y, so no multiplier is needed
     wire [16:0] fb_off = {1'b0, fb_y, 8'b0} + {3'b0, fb_y, 6'b0};
 
     assign fb_addr = in_image ? (fb_off + {8'b0, fb_x}) : 17'd0;
 
-    // ---- stage 1: index -> palette ---------------------------------------
+    // Stage 1: pixel index to palette
     assign pal_addr = fb_index;
 
-    // ---- sync and blank, delayed to match the two read stages ------------
-    // Active low, and the polarity is not negotiable: 640x480@60 specifies
-    // negative sync on both. Getting it backwards gives a rolling picture.
+    // Sync is active low, delayed two cycles to line up with the pixel data
     wire hs_0 = ~((hcnt >= HW'(h_visible + h_front)) &
                   (hcnt <  HW'(h_visible + h_front + h_sync)));
     wire vs_0 = ~((vcnt >= VW'(v_visible + v_front)) &
@@ -138,14 +108,12 @@ module vga #(
     assign vga_blank_n = blank_2;
     assign vga_sync_n  = 1'b0;         // sync-on-green unused; tie low per DE1-SoC
 
-    // Black outside the letterboxed image, so the margins are not whatever the
-    // palette happens to hold at index 0.
+    // Black outside the letterboxed image
     assign vga_r = image_2 ? pal_rgb[23:16] : 8'h00;
     assign vga_g = image_2 ? pal_rgb[15:8]  : 8'h00;
     assign vga_b = image_2 ? pal_rgb[7:0]   : 8'h00;
 
-    // One cycle at the start of vertical blanking. The CPU side uses this to
-    // pace itself to the display if it ever runs fast enough to want to.
+    // One cycle at the start of vertical blanking
     logic vs_2_q;
     always_ff @(posedge clk) begin
         if (reset) vs_2_q <= 1'b1;

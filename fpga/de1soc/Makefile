@@ -1,11 +1,5 @@
-# DE1-SoC gateware. Synthesis happens in Quartus; this Makefile is for the
-# parts that can be simulated locally, which is most of them.
-#
-#   make sim        every block-level testbench
-#   make vga ps2    one at a time
-#
-# Quartus reads SystemVerilog natively, so unlike the iCE40 flow there is no
-# sv2v step on this path.
+# DE1-SoC block-level simulations (synthesis is done in Quartus)
+# make sim runs every testbench; make vga, ps2 or sdram runs one
 
 ROOT    := ../..
 BUILD   := $(ROOT)/build/de1soc
@@ -36,7 +30,6 @@ $(BUILD)/ps2_tb: sim/ps2_tb.sv ps2_keyboard.sv
 	@mkdir -p $(BUILD)
 	@$(IVERILOG) -g2012 -o $@ $^
 
-# The shared memory_io.sv / system.sv come from rtl/.
 $(BUILD)/sdram_tb: sim/sdram_tb.sv sim/sdram_model.sv sdram_ctrl.sv
 	@mkdir -p $(BUILD)
 	@$(IVERILOG) -g2012 -I$(ROOT)/rtl/core -I$(ROOT)/rtl/mem -o $@ $^

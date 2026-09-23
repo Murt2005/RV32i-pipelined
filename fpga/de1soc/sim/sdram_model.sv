@@ -1,17 +1,4 @@
-// Behavioural IS42S16320D, written to catch a controller that is wrong rather
-// than merely to store bytes.
-//
-// A model that only remembers data will happily accept a read issued one cycle
-// after ACTIVATE and hand back the right answer, so the controller passes in
-// simulation and returns garbage on the board -- which is the classic way an
-// SDRAM bring-up eats a fortnight. So every datasheet interval this controller
-// can violate is checked here and reported with $error: tRCD, tRP, tRC, tRFC,
-// tMRD, CAS-before-ACTIVATE, and access to a bank with no open row.
-//
-// Storage is an associative array. The real part is 64 MB and a dense array of
-// that size makes the simulator crawl and the machine swap; a sparse one costs
-// nothing for the few thousand words a test actually touches, and reads of
-// never-written addresses return X, which is itself a useful signal.
+// Behavioural IS42S16320D that $errors on any datasheet timing the controller could violate
 
 `timescale 1ns / 1ps
 
@@ -21,15 +8,14 @@ module sdram_model #(
     parameter int bank_bits   = 2,
     parameter int cas_latency = 3,
 
-    // Datasheet minima in ns, checked against $realtime.
+    // Datasheet minima in ns, checked against $realtime
     parameter real t_rcd = 20.0,
     parameter real t_rp  = 20.0,
     parameter real t_rc  = 70.0,
     parameter real t_rfc = 70.0,
     parameter real t_mrd = 15.0,
 
-    // Rows per bank actually stored. The controller is unaware of this; it
-    // only bounds what a testbench may touch.
+    // Rows per bank actually stored, which bounds what a test may touch
     parameter int sim_row_bits = 3,
 
     parameter bit verbose = 0
@@ -48,17 +34,12 @@ module sdram_model #(
 
     localparam int BANKS = 1 << bank_bits;
 
-    // Storage for a bounded slice of the part, not all 64 MB of it.
-    //
-    // An associative array would be the natural choice and iverilog 13 does not
-    // have them, so this is dense over `sim_row_bits` rows per bank. Any access
-    // to a higher row is reported rather than folded back into range: silent
-    // aliasing would let a test that wandered outside the modelled window pass
-    // by reading back its own collision, which is worse than not modelling it.
+    // Dense storage over sim_row_bits rows per bank, since iverilog has no associative arrays
+    // Access above that is reported, not wrapped, so a test can't pass on an aliased read
     logic [15:0] mem [0:(BANKS << (sim_row_bits + col_bits)) - 1];
     logic [15:0] cur;
 
-    // Per-bank state.
+    // Per-bank state
     logic                row_active [BANKS];
     logic [row_bits-1:0] active_row [BANKS];
     real                 t_activate [BANKS];   // when ACTIVATE was issued
@@ -70,7 +51,7 @@ module sdram_model #(
 
     int errors = 0;
 
-    // Read pipeline: CL cycles deep, plus one for the second burst beat.
+    // Read pipeline: CL cycles deep, plus one for the second burst beat
     logic [15:0] rd_pipe  [0:7];
     logic        rd_valid [0:7];
 
@@ -78,13 +59,12 @@ module sdram_model #(
     logic        dq_drive;
     assign dq = dq_drive ? dq_out : 16'bz;
 
-    // Write burst tracking: BL=2, so a WRITE takes data on its own cycle and
-    // the next one.
+    // Write bursts: BL=2, so data comes on the WRITE cycle and the next
     int                  wr_beats;
     logic [col_bits-1:0] wr_col;
     logic [bank_bits-1:0] wr_bank;
 
-    // Read burst tracking.
+    // Read burst tracking
     int                  rd_beats;
     logic [col_bits-1:0] rd_col;
     logic [bank_bits-1:0] rd_bank;
@@ -124,7 +104,7 @@ widen sim_row_bits or move the test addresses",
             t_precharge[b] = -1000.0;
         end
         for (int i = 0; i < 8; i++) rd_valid[i] = 0;
-        // x rather than 0, so a read of never-written memory is visible.
+        // x rather than 0, so a read of never-written memory stands out
         for (int i = 0; i < (BANKS << (sim_row_bits + col_bits)); i++)
             mem[i] = 16'hxxxx;
         wr_beats = 0;
@@ -133,16 +113,14 @@ widen sim_row_bits or move the test addresses",
     end
 
     always_ff @(posedge clk) begin
-        // ---- shift the read pipeline -------------------------------------
+        // Shift the read pipeline
         for (int i = 7; i > 0; i--) begin
             rd_pipe[i]  <= rd_pipe[i-1];
             rd_valid[i] <= rd_valid[i-1];
         end
         rd_valid[0] <= 1'b0;
 
-        // ---- continue an in-flight read burst ------------------------------
-        // The *first* beat is launched by the READ command itself, below; this
-        // handles the remaining beats of the burst.
+        // Remaining beats of a read; the READ command launches the first
         if (rd_beats > 0) begin
             rd_pipe[0]  <= mem[key(rd_bank, active_row[rd_bank], rd_col)];
             rd_valid[0] <= 1'b1;
@@ -150,7 +128,7 @@ widen sim_row_bits or move the test addresses",
             rd_beats    <= rd_beats - 1;
         end
 
-        // ---- continue an in-flight write burst -----------------------------
+        // Continue an in-flight write burst
         if (wr_beats > 0) begin
             if (dqm != 2'b11) begin
                 cur = mem[key(wr_bank, active_row[wr_bank], wr_col)];
@@ -167,11 +145,11 @@ widen sim_row_bits or move the test addresses",
         end
 
         if (!cke) begin
-            // Clock-enable low freezes the part; nothing here uses it.
+            // Clock-enable low freezes the part; nothing here uses it
         end else begin
             case (cmd)
             C_LMR: begin
-                // All banks must be idle for a mode-register load.
+                // All banks must be idle for a mode-register load
                 for (int b = 0; b < BANKS; b++)
                     if (row_active[b]) fail("LMR with a row still open");
                 t_last_lmr  = $realtime;
@@ -220,10 +198,7 @@ widen sim_row_bits or move the test addresses",
                 else if ($realtime - t_activate[ba] < t_rcd)
                     fail($sformatf("tRCD violated: %.1f ns after ACTIVATE, need %.1f",
                                    $realtime - t_activate[ba], t_rcd));
-                // First beat now, second next cycle. Launching both from the
-                // burst counter instead would put the data one cycle late and
-                // silently turn CL3 into CL4 -- which a controller written to
-                // match would then "pass" with, and the board would not.
+                // First beat now, second next cycle; doing both from the counter would turn CL3 into CL4
                 rd_bank     <= ba;
                 rd_pipe[0]  <= mem[key(ba, active_row[ba], addr[col_bits-1:0])];
                 rd_valid[0] <= 1'b1;
@@ -255,7 +230,7 @@ widen sim_row_bits or move the test addresses",
         end
     end
 
-    // ---- drive DQ, cas_latency cycles after the read command --------------
+    // Drive DQ cas_latency cycles after the read command
     always_comb begin
         dq_drive = rd_valid[cas_latency-1];
         dq_out   = rd_pipe[cas_latency-1];

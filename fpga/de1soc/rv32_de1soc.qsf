@@ -1,19 +1,14 @@
-# DE1-SoC pin assignments, Cyclone V 5CSEMA5F31C6.
-#
-# Taken from the Terasic DE1-SoC user manual's pin table. Every pin here is
-# checked against the schematic net name, because a VGA output on the wrong
-# ball is a blank monitor with no other symptom.
+# DE1-SoC pin assignments (Cyclone V 5CSEMA5F31C6), from the Terasic manual
 
 set_global_assignment -name FAMILY "Cyclone V"
 set_global_assignment -name DEVICE 5CSEMA5F31C6
 set_global_assignment -name TOP_LEVEL_ENTITY rv32_de1soc
 set_global_assignment -name SDC_FILE rv32_de1soc.sdc
 
-# 3.3-V LVTTL everywhere; the DE1-SoC banks used here are all 3.3 V.
+# 3.3-V LVTTL everywhere
 set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "3.3-V LVTTL"
 
-# Unused pins as inputs, tri-stated. The default is "output driving ground",
-# which on a board with things wired to those balls is a way to damage them.
+# Unused pins as tri-stated inputs; the default drives them to ground
 set_global_assignment -name RESERVE_ALL_UNUSED_PINS "AS INPUT TRI-STATED"
 
 set_location_assignment PIN_AF14 -to CLOCK_50
@@ -45,7 +40,7 @@ set_location_assignment PIN_W20  -to LEDR[7]
 set_location_assignment PIN_W21  -to LEDR[8]
 set_location_assignment PIN_Y21  -to LEDR[9]
 
-# ---- VGA, via the ADV7123 --------------------------------------------------
+# VGA
 set_location_assignment PIN_A11 -to VGA_CLK
 set_location_assignment PIN_F10 -to VGA_HS
 set_location_assignment PIN_C10 -to VGA_VS
@@ -79,11 +74,11 @@ set_location_assignment PIN_F15 -to VGA_B[5]
 set_location_assignment PIN_G15 -to VGA_B[6]
 set_location_assignment PIN_J14 -to VGA_B[7]
 
-# ---- PS/2 -------------------------------------------------------------------
+# PS/2
 set_location_assignment PIN_AD7 -to PS2_CLK
 set_location_assignment PIN_AE7 -to PS2_DAT
 
-# ---- SDRAM, IS42S16320D -----------------------------------------------------
+# SDRAM
 set_location_assignment PIN_AK14 -to DRAM_ADDR[0]
 set_location_assignment PIN_AH14 -to DRAM_ADDR[1]
 set_location_assignment PIN_AG15 -to DRAM_ADDR[2]
@@ -127,21 +122,15 @@ set_location_assignment PIN_AK12 -to DRAM_UDQM
 set_location_assignment PIN_AE13 -to DRAM_RAS_N
 set_location_assignment PIN_AA13 -to DRAM_WE_N
 
-# ---- sources ----------------------------------------------------------------
-# Quartus reads SystemVerilog natively, so unlike the iCE40 flow there is no
-# sv2v step. Paths are relative to fpga/de1soc/.
+# Sources, relative to fpga/de1soc
 set_global_assignment -name SYSTEMVERILOG_FILE rv32_de1soc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE vga.sv
 set_global_assignment -name SYSTEMVERILOG_FILE ps2_keyboard.sv
 set_global_assignment -name SYSTEMVERILOG_FILE sdram_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE fb_ram.sv
-# BOARD_TOP swaps top.sv's behavioural SDRAM for the real controller, gives the
-# framebuffer its scanout port, and exports the palette. The simulation build is
-# textually unchanged without it -- `make cycle-check` reports identical counts
-# across all 103 tests either way.
+# BOARD_TOP switches top.sv to the real SDRAM, framebuffer scanout and palette
 set_global_assignment -name VERILOG_MACRO "BOARD_TOP=1"
-# Every `include in rtl/ names a bare file, so each directory has to be on the
-# search path -- the same list the simulation Makefile passes as -I.
+# Include search path for rtl/
 set_global_assignment -name SEARCH_PATH ../../rtl
 set_global_assignment -name SEARCH_PATH ../../rtl/core
 set_global_assignment -name SEARCH_PATH ../../rtl/mem

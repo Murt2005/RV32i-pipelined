@@ -1,45 +1,16 @@
-// SDRAM controller for the DE1-SoC's IS42S16320D: 64 MB, x16, 4 banks,
-// 8192 rows, 1024 columns.
-//
-// Presents the project's `memory_io` contract, so from the caches' side this is
-// interchangeable with memory.sv and memory_delay.sv: a request is accepted
-// when rsp.ready is high, and exactly one rsp.valid follows with rsp.addr
-// echoing. Everything below is about honouring that while an SDRAM does what an
-// SDRAM does.
-//
-// Open page, one row at a time. The caches fill a 32-byte line as *eight
-// separate word requests* at consecutive addresses (bus/icache.sv:127), not as
-// a burst. Closing the row after each would pay activate + precharge eight
-// times for one line -- roughly 80 cycles where 25 will do. So the open row is
-// left open, and a request that hits it costs only a CAS. Sequential access,
-// which is what a line fill and what Doom's renderer both produce, is the case
-// this is tuned for.
-//
-// One row rather than one per bank. Four open rows would help a workload that
-// interleaves streams -- and Doom's renderer is exactly that, a texture and a
-// destination at unrelated addresses. It is deliberately not done yet: bank
-// tracking multiplies the state and the timing checks by four, and this needs
-// to be *correct* before it is clever. The measurement to justify it belongs on
-// hardware, where a miss actually costs something.
-//
-// Burst length 2, so one SDRAM burst is exactly one 32-bit word. The alternative
-// -- BL1 and two commands -- doubles the command count for no benefit, and
-// longer bursts cannot be used when the client asks for one word at a time.
-//
-// Timing is in clock cycles at `clk_hz`, computed from the datasheet's
-// nanoseconds so that changing the clock does not silently violate anything.
+// SDRAM controller for the IS42S16320D (64 MB, x16), behind the memory_io interface
+// Keeps one row open so sequential words only pay a CAS; a burst of 2 is one 32-bit word
 
 `include "memory_io.sv"
 
 module sdram_ctrl #(
     parameter int clk_hz = 100_000_000,
 
-    // IS42S16320D geometry.
     parameter int row_bits  = 13,
     parameter int col_bits  = 10,
     parameter int bank_bits = 2,
 
-    // Datasheet, -7 grade. Rounded up to whole cycles.
+    // Datasheet timings, -7 speed grade
     parameter int t_rcd_ns   = 20,     // activate -> read/write
     parameter int t_rp_ns    = 20,     // precharge -> activate
     parameter int t_rc_ns    = 70,     // activate -> activate, same bank
@@ -48,17 +19,17 @@ module sdram_ctrl #(
     parameter int t_init_us  = 100,    // power-on quiet time
     parameter int cas_latency = 3,     // 2 or 3; 3 is safe at 100 MHz
 
-    // 8192 rows in 64 ms.
+    // 8192 rows in 64 ms
     parameter int refresh_us_x100 = 781   // 7.81 us, in hundredths
 ) (
     input  logic clk,
     input  logic reset,
 
-    // CPU side.
+    // CPU side
     input  memory_io_req  req,
     output memory_io_rsp  rsp,
 
-    // SDRAM pins.
+    // SDRAM pins
     output logic [row_bits-1:0]  dram_addr,
     output logic [bank_bits-1:0] dram_ba,
     output logic                 dram_cke,
@@ -69,12 +40,10 @@ module sdram_ctrl #(
     output logic [1:0]           dram_dqm,
     inout  wire  [15:0]          dram_dq,
 
-    // Bring-up visibility. `ready` here means initialisation has finished;
-    // before that every request is refused rather than queued.
+    // High once initialisation has finished
     output logic init_done
 );
 
-    // ---- timing, in cycles -------------------------------------------------
     localparam int NS_PER_CYCLE = 1_000_000_000 / clk_hz;
     `define CYC(ns) (((ns) + NS_PER_CYCLE - 1) / NS_PER_CYCLE)
 
@@ -84,19 +53,13 @@ module sdram_ctrl #(
     localparam int T_RFC  = `CYC(t_rfc_ns);
     localparam int T_WR   = `CYC(t_wr_ns);
     localparam int T_INIT = (clk_hz / 1_000_000) * t_init_us;
-    // Divide by a million first, then by a hundred. Doing it as
-    // (clk_hz / 100_000_000) * refresh_us_x100 reads more directly and is
-    // wrong: it is integer division, so at 50 MHz the first term is 0, the
-    // whole interval becomes 0, and $clog2(1) makes the counter zero bits wide.
-    // The board build is the 50 MHz one; the testbench ran at 100 MHz, where
-    // the expression happens to give the right answer. Scaling down before
-    // multiplying also keeps clk_hz * refresh out of 32-bit overflow.
+    // Divide clk_hz down first, or integer division gives 0 at 50 MHz
     localparam int T_REF  = (clk_hz / 1_000_000) * refresh_us_x100 / 100;
 
     localparam int CW = 16;                      // wide enough for T_INIT
     localparam int RW = $clog2(T_REF + 1);
 
-    // ---- command encoding, {cs,ras,cas,we} ---------------------------------
+    // Commands, as {cs, ras, cas, we}
     localparam logic [3:0] CMD_NOP      = 4'b0111;
     localparam logic [3:0] CMD_ACTIVE   = 4'b0011;
     localparam logic [3:0] CMD_READ     = 4'b0101;
@@ -109,25 +72,16 @@ module sdram_ctrl #(
     logic [3:0] cmd;
     assign {dram_cs_n, dram_ras_n, dram_cas_n, dram_we_n} = cmd;
 
-    // Mode register: burst length 2, sequential, CAS latency, single-location
-    // write (A9=1) so a write burst does not scribble past the word we mean.
+    // Mode register: burst length 2, sequential, single-location writes (A9)
     localparam logic [12:0] MODE_REG =
         {3'b000, 1'b1, 2'b00, cas_latency[2:0], 1'b0, 3'b001};
 
-    // ---- address split -----------------------------------------------------
-    // Column in the low bits so that consecutive words stay in one row: a row
-    // holds 1024 x 16 bits = 2 KiB, which is 64 cache lines.
-    //
-    //   byte addr  [25:24] bank | [23:11] row | [10:1] col | [0] byte-in-word
-    //
-    // req.addr is a *word* address in this design's convention, so it is
-    // shifted up by two to get bytes before being split.
+    // req.addr is a word address; as bytes: [25:24] bank, [23:11] row, [10:1] column
     wire [25:0] byte_addr = {req.addr[23:0], 2'b00};
     wire [bank_bits-1:0] req_bank = byte_addr[25:24];
     wire [row_bits-1:0]  req_row  = byte_addr[23:11];
     wire [col_bits-1:0]  req_col  = byte_addr[10:1];
 
-    // ---- state -------------------------------------------------------------
     typedef enum logic [3:0] {
         S_INIT_WAIT, S_INIT_PRE, S_INIT_REF1, S_INIT_REF2, S_INIT_LMR,
         S_IDLE, S_ACTIVATE, S_READ, S_READ_WAIT, S_WRITE, S_WRITE_WAIT,
@@ -143,8 +97,7 @@ module sdram_ctrl #(
     logic [row_bits-1:0]  open_row;
     logic [bank_bits-1:0] open_bank;
 
-    // The captured request. Latched because req may not be held, and because
-    // the response must echo the address it was made with.
+    // Latched, since req isn't held and the response has to echo its address
     logic [`word_address_size-1:0] cap_addr;
     logic [31:0]                   cap_data;
     logic [3:0]                    cap_wr;
@@ -156,7 +109,6 @@ module sdram_ctrl #(
     logic [15:0] rd_lo;
     logic [2:0]  cas_count;
 
-    // ---- DQ tristate -------------------------------------------------------
     logic        dq_drive;
     logic [15:0] dq_out;
     assign dram_dq = dq_drive ? dq_out : 16'bz;
@@ -166,17 +118,7 @@ module sdram_ctrl #(
                     && (state != S_INIT_REF1) && (state != S_INIT_REF2)
                     && (state != S_INIT_LMR);
 
-    // A request is accepted only when idle, initialised, out of any timing
-    // wait, and with no refresh pending. Refusing rather than queueing keeps
-    // this to one outstanding access, which the memory_io contract assumes.
-    //
-    // `timer == 0` is the part that is easy to leave out and fatal to omit. The
-    // timer gates the whole state machine, so while it runs -- write recovery,
-    // tRP, tRCD -- nothing is sampled. Advertising ready during that window
-    // makes the controller drop a request it has already claimed: the client
-    // sees ready, believes the access is under way, and waits for a response
-    // that will never come. It deadlocked the second write in the testbench,
-    // and on hardware it would present as the CPU hanging on a cache miss.
+    // Only accept when idle and the timer is 0; ready during a timing wait drops the request
     wire can_accept = (state == S_IDLE) && init_done && !refresh_due
                    && (timer == 0);
     wire req_fire   = req.valid && can_accept
@@ -185,10 +127,7 @@ module sdram_ctrl #(
     logic        rsp_valid_r;
     logic [31:0] rsp_data_r;
 
-    // One block, because `rsp` is one variable. Two always_comb blocks each
-    // assigning part of it is multiple drivers on the whole struct, and the
-    // result is not "the fields combine" -- it is undefined, and it showed up
-    // as a controller that initialised and then never accepted a request.
+    // rsp is one packed struct, so it has to be driven from a single block
     always_comb begin
         rsp       = memory_io_no_rsp;
         rsp.ready = can_accept;
@@ -197,10 +136,7 @@ module sdram_ctrl #(
         rsp.data  = rsp_data_r;
     end
 
-    // ---- refresh accounting ------------------------------------------------
-    // Counted independently of the state machine so that a long burst of
-    // accesses cannot starve refresh: the flag latches and is only cleared by
-    // an actual refresh command.
+    // Counted separately so a stream of accesses can't starve refresh
     always_ff @(posedge clk) begin
         if (reset) begin
             refresh_timer <= '0;
@@ -214,7 +150,6 @@ module sdram_ctrl #(
         end
     end
 
-    // ---- main sequencer ----------------------------------------------------
     always_ff @(posedge clk) begin
         if (reset) begin
             state       <= S_INIT_WAIT;
@@ -238,7 +173,7 @@ module sdram_ctrl #(
                 timer <= timer - CW'(1);
             end else begin
                 case (state)
-                // ---- power-on sequence --------------------------------
+                // Power-on sequence
                 S_INIT_WAIT: begin
                     cmd       <= CMD_PRECHARGE;
                     dram_addr <= 13'h400;         // A10 = all banks
@@ -267,11 +202,10 @@ module sdram_ctrl #(
                     row_open <= 1'b0;
                 end
 
-                // ---- normal operation ---------------------------------
+                // Normal operation
                 S_IDLE: begin
                     if (refresh_due) begin
-                        // Precharge first if a row is open; the refresh
-                        // itself requires all banks idle.
+                        // Refresh needs all banks idle, so close any open row first
                         if (row_open) begin
                             cmd       <= CMD_PRECHARGE;
                             dram_addr <= 13'h400;
@@ -293,8 +227,7 @@ module sdram_ctrl #(
 
                         if (row_open && open_row == req_row
                                      && open_bank == req_bank) begin
-                            // Row hit: straight to CAS. This is the case the
-                            // whole open-page policy exists for.
+                            // Row hit: straight to the read or write
                             if (is_any_byte(req.do_write)) state <= S_WRITE;
                             else                            state <= S_READ;
                         end else if (row_open) begin
@@ -326,15 +259,14 @@ module sdram_ctrl #(
                 S_READ: begin
                     cmd       <= CMD_READ;
                     dram_ba   <= cap_bank;
-                    // A10 = 0: do not auto-precharge, the row stays open.
+                    // A10 = 0 keeps the row open
                     dram_addr <= {3'b000, cap_col};
                     cas_count <= 3'(cas_latency + 1);
                     state     <= S_READ_WAIT;
                 end
 
                 S_READ_WAIT: begin
-                    // Burst of 2: the first halfword lands cas_latency cycles
-                    // after the command, the second on the cycle after that.
+                    // First halfword arrives cas_latency cycles after the command, the second one after
                     if (cas_count != 0) begin
                         cas_count <= cas_count - 3'd1;
                         if (cas_count == 3'd1) rd_lo <= dram_dq;
@@ -356,7 +288,7 @@ module sdram_ctrl #(
                 end
 
                 S_WRITE_WAIT: begin
-                    // Second halfword of the burst, on the very next cycle.
+                    // Second halfword of the burst
                     dq_drive    <= 1'b1;
                     dq_out      <= cap_data[31:16];
                     dram_dqm    <= ~cap_wr[3:2];
@@ -375,7 +307,6 @@ module sdram_ctrl #(
     end
 
 `ifndef SYNTHESIS
-    // The contract this module has to keep, checked where it is cheap to check.
     always_ff @(posedge clk) begin
         if (!reset) begin
             if (rsp_valid_r && !init_done)

@@ -1,14 +1,4 @@
-// Checks the VGA timing against the 640x480@60 numbers, and checks that the
-// pixel pipeline lines up with the sync it is supposed to accompany.
-//
-// The second half is the point. Timing counters are easy and rarely wrong; the
-// two-cycle delay between reading a framebuffer address and driving the DAC is
-// easy and frequently wrong, and its symptom on a real monitor -- a picture
-// shifted two pixels with a colour fringe at one edge -- looks like a cable or
-// a monitor problem rather than an RTL one.
-//
-//   iverilog -g2012 -o build/de1soc/vga_tb fpga/de1soc/sim/vga_tb.sv fpga/de1soc/vga.sv
-//   ./build/de1soc/vga_tb
+// Checks the VGA timing and that each pixel lines up with its sync
 
 `timescale 1ns / 1ps
 
@@ -33,15 +23,13 @@ module vga_tb;
         .vsync_pulse(vsync_pulse)
     );
 
-    // A framebuffer and palette that encode their own address, so a pixel that
-    // arrives at the wrong time is identifiable rather than merely wrong.
-    // Both model one cycle of read latency, which is what an M10K does.
+    // Framebuffer and palette encode their own address, so a late pixel is identifiable
     logic [16:0] fb_addr_q;
     logic [7:0]  pal_addr_q;
     always_ff @(posedge clk) fb_addr_q  <= fb_addr;
     always_ff @(posedge clk) pal_addr_q <= pal_addr;
 
-    // 251 is prime, so the pattern does not alias with the 320-pixel stride.
+    // 251 is prime, so the pattern does not alias with the 320-pixel stride
     assign fb_index = fb_addr_q % 251;
     assign pal_rgb  = {pal_addr_q, ~pal_addr_q, pal_addr_q ^ 8'h5A};
 
@@ -56,7 +44,7 @@ module vga_tb;
         end
     endtask
 
-    // ---- edge detection, no $past -----------------------------------------
+    // Edge detection without $past
     logic hs_q, vs_q;
     always_ff @(posedge clk) begin
         hs_q <= hs;
@@ -66,12 +54,7 @@ module vga_tb;
     wire vs_fall = vs_q & ~vs;
     wire vs_rise = ~vs_q & vs;
 
-    // ---- the pipeline check, free-running ---------------------------------
-    //
-    // Whenever a visible pixel is on the DAC, its colour must be the palette
-    // entry for the framebuffer address requested two cycles earlier.
-    // Reconstructed here independently of the DUT's own pipeline registers, so
-    // a delay that is self-consistently wrong still fails.
+    // Each visible pixel must match the framebuffer address requested two cycles earlier
     logic [16:0] addr_d1, addr_d2;
     always_ff @(posedge clk) begin
         addr_d1 <= fb_addr;
@@ -95,13 +78,7 @@ module vga_tb;
         end
     end
 
-    // ---- measurements, as counters rather than procedural polling ---------
-    //
-    // Polling these from an initial block reads them one cycle late: the edge
-    // wires are driven from NBA-updated registers, so a process sampling on the
-    // same clock edge sees the previous value and every measurement comes back
-    // one too large. Counting in the same clock domain that produces the edges
-    // removes the race rather than compensating for it.
+    // Measured with counters on the same clock, since polling reads the edges a cycle late
     int  h_count = 0, h_low_count = 0;
     int  line_len = 0, hs_low = 0;
     int  v_line_count = 0, v_low_count = 0;
@@ -115,7 +92,7 @@ module vga_tb;
             v_line_count <= 0; v_low_count <= 0;
             img_lines_this <= 0; line_had_image <= 0;
         end else begin
-            // --- horizontal ---
+            // Horizontal
             if (hs_fall) begin
                 line_len <= h_count + 1;
                 hs_low   <= h_low_count + (hs ? 0 : 1);
@@ -126,7 +103,7 @@ module vga_tb;
                 h_low_count <= h_low_count + (hs ? 0 : 1);
             end
 
-            // --- vertical, counted in lines ---
+            // Vertical, in lines
             if (vs_fall) begin
                 frame_lines <= v_line_count;
                 vs_low      <= v_low_count;
@@ -140,7 +117,7 @@ module vga_tb;
                 if (line_had_image) img_lines_this <= img_lines_this + 1;
             end
 
-            // --- did this line carry any non-black visible pixel? ---
+            // Did this line have any non-black pixel
             if (hs_fall)                              line_had_image <= 0;
             else if (blank_n && !(r == 0 && g == 0 && b == 0))
                                                       line_had_image <= 1;
@@ -151,8 +128,7 @@ module vga_tb;
         repeat (4) @(posedge clk);
         reset = 0;
 
-        // Three full frames: one to settle, then the counters hold stable
-        // values for a complete frame each time round.
+        // Three frames: one to settle, then stable counts
         repeat (3) @(posedge vs_fall);
         @(posedge hs_fall);
         @(posedge clk);
@@ -161,7 +137,7 @@ module vga_tb;
         check("h sync width",          hs_low,      96);
         check("v total (lines/frame)", frame_lines, 525);
         check("v sync width (lines)",  vs_low,      2);
-        // 320x200 doubled is 400 lines of image, centred in 480.
+        // 320x200 doubled is 400 lines of image, centred in 480
         check("image lines",           img_lines,   400);
 
         $display("");

@@ -1,38 +1,5 @@
-// DE1-SoC board top: the RV32 machine with real video, a real keyboard and a
-// real SDRAM behind it.
-//
-// The bus, caches, on-chip memories and MMIO all live in the shared top.sv and
-// are not repeated here -- this file is only the things that exist because
-// there is a board. Doing it the other way, with a board-specific copy of the
-// bus, means two versions that drift and a Doom that works in one of them.
-//
-// ---------------------------------------------------------------------------
-// Clocking: 50 MHz for everything except scanout, which is 25 MHz.
-//
-// The plan called for the SDRAM at 100 MHz with a 2:1 clock-enable crossing.
-// This runs it at 50 MHz, in the CPU's own domain, on purpose: it removes the
-// crossing entirely for bring-up, and a controller that is *correct* at half
-// the bandwidth is worth more right now than one that is fast and suspect. The
-// timing parameters are computed from clk_hz, so raising it later is a
-// parameter change plus a re-run of sdram_tb, not a rewrite.
-//
-// Scanout genuinely is a separate domain, and needs no synchroniser: the
-// framebuffer is a true dual-port M10K with independent clocks per port, so the
-// CPU writes port A at 50 MHz while the video side reads port B at 25 MHz. The
-// worst case is a pixel one frame stale, never a corrupt one.
-//
-// ---------------------------------------------------------------------------
-// The core's `stall` input is tied low here, and that is a decision rather than
-// an omission.
-//
-// On the iCE40 board `stall` carries UART transmit backpressure. Formal found a
-// counterexample on that path (liveness_ch0, see DOOM_PLAN.md): one stalled
-// cycle with a JAL in fetch leaves the instruction latched and never retiring --
-// a core that is busy rather than hung, which no watchdog catches. That bug is
-// not fixed yet. This board loads over JTAG rather than a UART and has no need
-// to backpressure the pipeline, so the path is left unexercised instead of
-// carried onto hardware. If anything ever wants to drive `stall` here, the
-// liveness failure has to be closed first.
+// DE1-SoC top: the shared top.sv plus the board's clocks, VGA, PS/2 keyboard and SDRAM
+// stall stays tied low until the liveness bug on that path (see DOOM_PLAN.md) is fixed
 
 `include "system.sv"
 `include "memory_io.sv"
@@ -43,7 +10,7 @@ module rv32_de1soc (
     input  logic [9:0]  SW,
     output logic [9:0]  LEDR,
 
-    // VGA, via the ADV7123.
+    // VGA, via the ADV7123
     output logic        VGA_CLK,
     output logic [7:0]  VGA_R,
     output logic [7:0]  VGA_G,
@@ -53,12 +20,11 @@ module rv32_de1soc (
     output logic        VGA_BLANK_N,
     output logic        VGA_SYNC_N,
 
-    // PS/2. Receive only; these are bidirectional on the board but nothing
-    // here sends to the keyboard.
+    // PS/2, receive only
     input  logic        PS2_CLK,
     input  logic        PS2_DAT,
 
-    // SDRAM, IS42S16320D.
+    // SDRAM, IS42S16320D
     output logic [12:0] DRAM_ADDR,
     output logic [1:0]  DRAM_BA,
     output logic        DRAM_CAS_N,
@@ -72,10 +38,7 @@ module rv32_de1soc (
     output logic        DRAM_WE_N
 );
 
-    // ---- clocks ----------------------------------------------------------
-    // A Quartus PLL instance goes here. Declared as a black box so that this
-    // file elaborates in iverilog for the board-level testbench; the generated
-    // altera_pll is dropped in at synthesis and matches this port list.
+    // Quartus PLL, declared as a black box so this file also elaborates in iverilog
     logic clk_sys;      // 50 MHz, CPU + SDRAM
     logic clk_pix;      // 25 MHz, scanout
     logic clk_dram;     // 50 MHz, phase-shifted -3ns for the DRAM_CLK pin
@@ -90,16 +53,10 @@ module rv32_de1soc (
         .locked   (pll_locked)
     );
 
-    // The DRAM clock is driven from a phase-shifted PLL output rather than from
-    // clk_sys through logic: the part samples our outputs on its own clock
-    // edge, so it needs to arrive early enough to meet setup at the device
-    // after board delay. Routing a clock through the fabric instead is the
-    // classic reason an SDRAM works in simulation and not on the bench.
+    // DRAM_CLK comes straight from a phase-shifted PLL output, never through logic
     assign DRAM_CLK = clk_dram;
 
-    // Reset until the PLL locks, plus KEY[0] as a manual reset. Held for a
-    // while after lock so the SDRAM's own power-on quiet time is honoured from
-    // a defined start rather than from whenever configuration happened.
+    // Held in reset until the PLL locks and for a while after, for the SDRAM's power-on wait
     logic [15:0] reset_cnt;
     logic        reset;
     always_ff @(posedge clk_sys) begin
@@ -114,7 +71,6 @@ module rv32_de1soc (
         end
     end
 
-    // ---- PS/2 ------------------------------------------------------------
     logic       ps2_valid;
     logic [7:0] ps2_code;
     logic       ps2_err_parity, ps2_err_framing, ps2_err_timeout;
@@ -127,10 +83,7 @@ module rv32_de1soc (
         .err_timeout(ps2_err_timeout)
     );
 
-    // Scancode set 2 to the key events top.sv's MMIO block already accepts.
-    // 0xF0 prefixes a release and 0xE0 an extended code; both are consumed here
-    // so the CPU sees the same {pressed, code} pairs the simulation harness
-    // injects, and the software side does not change between the two.
+    // Turn set-2 scancodes into the {pressed, code} events the MMIO block expects
     logic       key_strobe;
     logic [8:0] key_event;
     logic       next_is_break, next_is_ext;
@@ -157,7 +110,6 @@ module rv32_de1soc (
         end
     end
 
-    // ---- video -----------------------------------------------------------
     logic [16:0] fb_addr;
     logic [7:0]  fb_index;
     logic [7:0]  pal_addr;
@@ -174,11 +126,8 @@ module rv32_de1soc (
         .vsync_pulse(vsync_pulse)
     );
 
-    // The ADV7123 latches on the rising edge of its own clock input, so it gets
-    // the pixel clock directly.
     assign VGA_CLK = clk_pix;
 
-    // ---- SDRAM -----------------------------------------------------------
     memory_io_req sdram_req;
     memory_io_rsp sdram_rsp;
     logic         sdram_init_done;
@@ -195,18 +144,7 @@ module rv32_de1soc (
         .init_done(sdram_init_done)
     );
 
-    // ---- the machine -----------------------------------------------------
-    //
-    // The same top.sv every simulation and every test in the project runs
-    // through, compiled with BOARD_TOP so that the SDRAM comes from the
-    // controller above, the framebuffer gains its scanout port, and the palette
-    // is readable by the DAC side. The simulation build is textually unchanged
-    // by that define; `make cycle-check` reports identical counts across all
-    // 103 tests.
-    //
-    // stall_rate and mem_delay are the simulation injectors and are tied off:
-    // the first is the path the liveness counterexample lives on (see the file
-    // header), the second models a memory that is now real.
+    // The shared top.sv, built with BOARD_TOP for the real SDRAM, framebuffer and palette
     logic halt, frame_done;
 
     top #(
@@ -232,9 +170,7 @@ module rv32_de1soc (
         .pal_rd_data(pal_rgb)
     );
 
-    // ---- bring-up visibility ---------------------------------------------
-    // LEDs before a console, because these are the only thing that works when
-    // nothing else does.
+    // Status LEDs for bring-up
     assign LEDR[0] = pll_locked;
     assign LEDR[1] = ~reset;
     assign LEDR[2] = sdram_init_done;

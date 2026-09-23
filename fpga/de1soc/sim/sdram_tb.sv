@@ -1,20 +1,4 @@
-// The SDRAM controller against the behavioural part, before either goes near
-// the CPU. The plan calls this out as the classic time sink, and the reason is
-// that debugging a memory controller through a stalling pipeline means every
-// symptom arrives second-hand.
-//
-// Three things are checked, in increasing order of how easy they are to get
-// wrong:
-//
-//   data      write then read back, at addresses chosen to exercise row hits,
-//             row misses and bank changes
-//   protocol  exactly one response per accepted request, with rsp.addr echoing
-//             -- the memory_io contract the caches rely on
-//   timing    delegated to the model, which $errors on any datasheet violation
-//
-//   iverilog -g2012 -o build/de1soc/sdram_tb fpga/de1soc/sim/sdram_tb.sv \
-//       fpga/de1soc/sim/sdram_model.sv fpga/de1soc/sdram_ctrl.sv
-//   ./build/de1soc/sdram_tb
+// SDRAM controller against the behavioural part: data, one response per request, and timing
 
 `timescale 1ns / 1ps
 
@@ -36,8 +20,7 @@ module sdram_tb;
     wire  [15:0] dram_dq;
     logic        init_done;
 
-    // A short power-on wait; the sequence is identical, and 100 us of simulated
-    // quiet time at 100 MHz is 10000 idle cycles of nothing happening.
+    // Short power-on wait to keep the simulation fast
     sdram_ctrl #(.clk_hz(100_000_000), .t_init_us(1), .cas_latency(3)) dut (
         .clk(clk), .reset(reset), .req(req), .rsp(rsp),
         .dram_addr(dram_addr), .dram_ba(dram_ba), .dram_cke(dram_cke),
@@ -54,8 +37,7 @@ module sdram_tb;
 
     int errors = 0;
 
-    // ---- protocol monitor, running the whole time -------------------------
-    // One response per accepted request, and the address must come back.
+    // Protocol monitor: one response per accepted request, with the address echoed
     int outstanding = 0;
     logic [`word_address_size-1:0] expect_addr;
 
@@ -83,14 +65,7 @@ module sdram_tb;
         end
     end
 
-    // ---- request helpers ---------------------------------------------------
-    //
-    // Stimulus changes on the negedge and is sampled on the posedge. Driving it
-    // straight after @(posedge clk) instead is a race: the DUT reads `req` in
-    // the same active region the task writes it, Verilog does not order those,
-    // and the symptom is a write whose do_write has already been cleared by the
-    // time the controller looks -- which presents as writes that complete and
-    // store nothing.
+    // Stimulus changes on the negedge, so it never races the DUT on the posedge
     task automatic drive_idle;
         req.valid    = 1'b0;
         req.do_read  = 4'b0000;
@@ -142,41 +117,39 @@ module sdram_tb;
         repeat (5) @(posedge clk);
         reset = 0;
 
-        // ---- initialisation completes -------------------------------------
+        // Initialisation completes
         while (!init_done) @(posedge clk);
         $display("  ok init_done asserted");
 
-        // ---- sequential words: the row-hit path a cache line fill takes ----
+        // Sequential words: the row-hit path a cache line fill takes
         for (i = 0; i < 16; i++)
             do_write(24'h000100 + i, 32'hA5A50000 + i);
         for (i = 0; i < 16; i++)
             expect_word(24'h000100 + i, 32'hA5A50000 + i);
         $display("  ok 16 sequential words survive a write/read round trip");
 
-        // ---- byte enables --------------------------------------------------
+        // Byte enables
         do_write(24'h000200, 32'hFFFFFFFF);
         issue(24'h000200, 32'h000000AA, 4'b0001, 4'b0000);   // lane 0 only
         expect_word(24'h000200, 32'hFFFFFFAA);
         $display("  ok byte enables write one lane only");
 
-        // ---- a different row, forcing precharge + activate ------------------
+        // A different row, forcing precharge and activate
         do_write(24'h000800, 32'hDEADBEEF);
         expect_word(24'h000100, 32'hA5A50000);     // old row still intact
         expect_word(24'h000800, 32'hDEADBEEF);
         $display("  ok row change preserves both rows");
 
-        // ---- a different bank -----------------------------------------------
+        // A different bank
         do_write(24'h400000, 32'hCAFEBABE);
         expect_word(24'h400000, 32'hCAFEBABE);
         expect_word(24'h000800, 32'hDEADBEEF);
         $display("  ok bank change preserves both banks");
 
-        // ---- open-page actually pays: a row hit must be cheaper than a miss --
-        // Open the row, then time a hit in it against a read in another row.
+        // A row hit must be cheaper than a miss
         expect_word(24'h000100, 32'hA5A50000);       // opens the row
         t0 = $time;  expect_word(24'h000101, 32'hA5A50001);  cycles_hit  = ($time - t0)/10;
-        // The far read is to memory that was written earlier, so it is a real
-        // check as well as a timing measurement.
+        // The far read hits earlier data, so it's a real check as well as a timing one
         t0 = $time;  expect_word(24'h000800, 32'hDEADBEEF);  cycles_miss = ($time - t0)/10;
         $display("  .. row hit %0d cycles, row miss %0d cycles", cycles_hit, cycles_miss);
         if (cycles_hit >= cycles_miss) begin
@@ -187,14 +160,13 @@ module sdram_tb;
             $display("  ok row hits are cheaper than row misses");
         end
 
-        // ---- survive a refresh ---------------------------------------------
-        // T_REF is 781 cycles, so idling well past it forces at least one.
+        // Survive a refresh: idling past T_REF (781 cycles) forces one
         repeat (2000) @(posedge clk);
         expect_word(24'h000100, 32'hA5A50000);
         expect_word(24'h400000, 32'hCAFEBABE);
         $display("  ok data survives refresh cycles");
 
-        // ---- the model's own timing verdict ---------------------------------
+        // The model's own timing verdict
         if (mem.errors != 0) begin
             $display("FAIL model reported %0d timing violations", mem.errors);
             errors = errors + mem.errors;
