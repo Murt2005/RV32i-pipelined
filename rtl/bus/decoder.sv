@@ -2,8 +2,8 @@
 `define _bus_decoder_sv
 
 `include "system.sv"
-`include "memory_io.sv"
-`include "memory_map.sv"
+`include "memory-io.sv"
+`include "memory-map.sv"
 
 // Address decode and response steering for one initiator port
 module bus_decoder #(

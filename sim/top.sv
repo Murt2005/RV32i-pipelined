@@ -1,6 +1,6 @@
 `include "base.sv"
 `include "memory.sv"
-`include "memory_map.sv"
+`include "memory-map.sv"
 `include "decoder.sv"
 `include "mmio.sv"
 `include "arbiter.sv"

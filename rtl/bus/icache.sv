@@ -2,7 +2,7 @@
 `define _icache_sv
 
 `include "system.sv"
-`include "memory_io.sv"
+`include "memory-io.sv"
 
 // Instruction cache: direct mapped, read only, one line fill at a time.
 module icache #(

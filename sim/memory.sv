@@ -2,7 +2,7 @@
 `define _memory_sv
 
 `include "system.sv"
-`include "memory_io.sv"
+`include "memory-io.sv"
 
 // Simulation memory. With max_delay > 0 each request waits 0..max_delay extra
 // cycles, drawn from an LFSR, and ready drops while one is waiting

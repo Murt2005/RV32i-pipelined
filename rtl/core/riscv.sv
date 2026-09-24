@@ -5,7 +5,7 @@
 `include "base.sv"
 
 package riscv;
-`include "riscv32_common.sv"
+`include "riscv32-common.sv"
 endpackage;
 
 `endif

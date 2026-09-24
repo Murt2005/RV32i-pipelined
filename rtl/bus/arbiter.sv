@@ -2,7 +2,7 @@
 `define _bus_arbiter_sv
 
 `include "system.sv"
-`include "memory_io.sv"
+`include "memory-io.sv"
 
 module bus_arbiter(
     input  logic clk,

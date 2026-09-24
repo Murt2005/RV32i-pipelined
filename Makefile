@@ -166,7 +166,7 @@ cycle-baseline cycle-check:
 		echo "===== $$name ====="; \
 		$(MAKE) --no-print-directory CONFIG=$$config $$target > $(CYCLE_LOG)/$$name.log 2>&1 \
 			|| { echo "  suite FAILED -- see $(CYCLE_LOG)/$$name.log"; rc=1; continue; }; \
-		python3 tools/cycle_report.py $(MODE) $(CYCLE_DIR)/$$name.json \
+		python3 tools/cycle-report.py $(MODE) $(CYCLE_DIR)/$$name.json \
 			$(CYCLE_LOG)/$$name.log || rc=1; \
 	done; \
 	exit $$rc
@@ -400,10 +400,10 @@ $(SPIKE_PREFIX)/bin/spike:
 # Lockstep co-simulation against Spike: cosim/cosim.cpp steps Spike once for
 # every instruction the core retires and stops at the first difference
 # --------------------------------------------------------------------
-$(COSIM): $(RTL_SRC) cosim/cosim_top.sv cosim/cosim.cpp $(SPIKE_PREFIX)/bin/spike
+$(COSIM): $(RTL_SRC) cosim/cosim-top.sv cosim/cosim.cpp $(SPIKE_PREFIX)/bin/spike
 	mkdir -p build/cosim
 	$(VERILATOR) -O3 --cc --build --exe --top-module cosim_top -Wno-fatal -DRVFI \
-		--Mdir build/cosim $(RTL_INC) cosim/cosim_top.sv cosim/cosim.cpp -o Vcosim_top \
+		--Mdir build/cosim $(RTL_INC) cosim/cosim-top.sv cosim/cosim.cpp -o Vcosim_top \
 		-CFLAGS "-std=c++20 -I$(SPIKE_PREFIX)/include" \
 		-LDFLAGS "-L$(SPIKE_PREFIX)/lib -Wl,-rpath,$(SPIKE_PREFIX)/lib -lriscv -lfesvr"
 
@@ -438,22 +438,22 @@ cosim-random: $(COSIM) $(TOOLS)
 # --------------------------------------------------------------------
 .PHONY: divider-tb
 
-build/sim/tb_divider: tests/tb_divider.sv rtl/core/divider.sv rtl/core/system.sv
+build/sim/tb-divider: tests/tb-divider.sv rtl/core/divider.sv rtl/core/system.sv
 	mkdir -p $(dir $@)
-	$(IVERILOG) -g2012 -Irtl/core -o $@ tests/tb_divider.sv
+	$(IVERILOG) -g2012 -Irtl/core -o $@ tests/tb-divider.sv
 
-divider-tb: build/sim/tb_divider
-	./build/sim/tb_divider
+divider-tb: build/sim/tb-divider
+	./build/sim/tb-divider
 
 # --------------------------------------------------------------------
 # Line/toggle coverage over the riscv-tests suites, via Verilator
 # --------------------------------------------------------------------
 .PHONY: coverage
 
-build/cov/Vtop: $(RTL_SRC) sim/verilator_top.cpp
+build/cov/Vtop: $(RTL_SRC) sim/verilator-top.cpp
 	mkdir -p build/cov
 	$(VERILATOR) -O0 --cc --build --top-module top --coverage \
-		--Mdir build/cov -Wno-fatal $(RTL_INC) sim/top.sv sim/verilator_top.cpp --exe \
+		--Mdir build/cov -Wno-fatal $(RTL_INC) sim/top.sv sim/verilator-top.cpp --exe \
 		-o Vtop
 
 coverage: build/cov/Vtop $(TOOLS)

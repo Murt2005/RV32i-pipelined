@@ -18,7 +18,7 @@ SV2V_INC  := -I$(RTL)/core -I$(RTL)/mem -I. -Iriscv-formal/checks
 
 # yosys can't read the core's SystemVerilog, so sv2v flattens wrapper and core first
 $(ROOT)/build/formal/rvfi_top.v: wrapper.sv $(wildcard $(RTL)/core/*.sv) \
-                                 $(RTL)/mem/memory_io.sv
+                                 $(RTL)/mem/memory-io.sv
 	mkdir -p $(ROOT)/build/formal
 	sv2v $(SV2V_DEFS) $(SV2V_INC) --write=$@ wrapper.sv $(RTL)/core/cpu.sv
 

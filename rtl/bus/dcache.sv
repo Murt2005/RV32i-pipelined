@@ -2,7 +2,7 @@
 `define _dcache_sv
 
 `include "system.sv"
-`include "memory_io.sv"
+`include "memory-io.sv"
 
 // Data cache for the SDRAM region: direct mapped, write-through, no write allocate
 module dcache #(

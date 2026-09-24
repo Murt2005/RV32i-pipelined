@@ -2,8 +2,8 @@
 `define _mmio_sv
 
 `include "system.sv"
-`include "memory_io.sv"
-`include "memory_map.sv"
+`include "memory-io.sv"
+`include "memory-map.sv"
 
 module mmio(
     input  logic clk,

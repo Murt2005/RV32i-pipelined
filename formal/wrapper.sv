@@ -2,7 +2,7 @@
 // Delays and refusals are bounded so liveness can't fail just because the environment never answers
 
 `include "system.sv"
-`include "memory_io.sv"
+`include "memory-io.sv"
 `include "rvfi_macros.vh"
 
 module rvfi_wrapper (
