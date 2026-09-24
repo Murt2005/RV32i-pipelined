@@ -23,6 +23,24 @@ You need a RISC-V GCC toolchain (`riscv64-unknown-elf-*`), Icarus Verilog, and
 Python 3. Verilator is only needed for `make coverage`, and the formal flow has
 its own requirements, listed in [`formal/README.md`](formal/README.md).
 
+## Configurations
+
+Programs are built and run in one of two configurations, chosen with `CONFIG`:
+
+| `CONFIG` | Program lives in | For |
+|---|---|---|
+| `core` (default) | IMEM and DMEM | Developing and benchmarking the core |
+| `system` | A boot stub in IMEM, the program in SDRAM | Testing the bus and caches |
+
+```bash
+make run-riscv-tests-iverilog CONFIG=system   # rv32ui from SDRAM
+make run-dhrystone CONFIG=core                # Dhrystone from IMEM/DMEM
+```
+
+Each configuration builds into its own folder, `build/core/` or `build/system/`.
+`tools/elftohex-core.sh` and `tools/elftohex-system.sh` turn a program into the
+memory images for each.
+
 ## Architecture
 
 | Stage | Does |
@@ -71,12 +89,13 @@ This is the simulation top, `rtl/top.sv`.
 
 | Command | What it checks |
 |---|---|
-| `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, run twice: from IMEM/DMEM, and from SDRAM through the caches |
-| `make rvfi-check` | Replays every retired instruction of every test through a reference model (`tools/rv32_model.py`) |
+| `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, in the core configuration and then the system configuration |
+| `make run-riscv-tests-iverilog`, `-m-iverilog`, `-mi-iverilog` | One suite, in `CONFIG` |
+| `make rvfi-check` | Replays every retired instruction of every test, in both configurations, through a reference model (`tools/rv32_model.py`) |
 | `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
-| `make cycle-check` | Cycle counts against the checked-in baselines, to catch timing changes |
+| `make cycle-check` | Cycle counts against the checked-in baselines for both configurations, to catch timing changes |
 | `make divider-tb` | The divider on its own: every spec corner case plus random operands |
-| `make coverage` | Verilator line and toggle coverage over every suite (83%) |
+| `make coverage` | Verilator line and toggle coverage over every suite in both configurations (83%) |
 | `python3 tools/rv32_diff.py` | Random RV32IM programs against the reference model |
 | `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
@@ -102,7 +121,7 @@ them from SDRAM.
 
 | Command | What |
 |---|---|
-| `make run-dhrystone` | Dhrystone in simulation (0.842 DMIPS/MHz) |
+| `make run-dhrystone` | Dhrystone in `CONFIG`: 0.842 DMIPS/MHz in core, 0.768 in system |
 | `make run-sdram-hello` | A newlib C program running from SDRAM |
 
 ## Layout
