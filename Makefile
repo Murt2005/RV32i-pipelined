@@ -25,6 +25,11 @@ CSTD=-std=gnu17
 SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
 LDPOSTFLAGS= -Lsw/libmc -lmc -L$(RISCV_LIB) -lgcc
 TOOLS=build/tools/dumphex
+
+# ELF to hex images: the core configuration (IMEM and DMEM) and the system
+# configuration (a boot stub in IMEM, the program in SDRAM through the caches)
+HEX_CORE   := /bin/bash tools/elftohex-core.sh
+HEX_SYSTEM := /bin/bash tools/elftohex-system.sh
 LIBS=sw/libmc/libmc.a
 
 SIM_IVERILOG := build/sim/result-iverilog
@@ -210,12 +215,14 @@ RVTEST_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-built
                 -Itests/riscv-tests/env/p -Itests/riscv-tests/env \
                 -Itests/riscv-tests/isa/macros/scalar -T $(RVTEST_LD)
 
-# $(call run-rvtests,suite,tests,elf-dir[,hex-converter])
+# $(call run-rvtests,suite,tests,elf-dir,hex-converter)
 define run-rvtests
 @pass=0; fail=0; \
 	for t in $(2); do \
 		d=$(HEX)/$(3)/$$t; \
-		$(if $(4),$(4),/bin/bash tools/elftohex.sh) build/$(3)/$$t.elf $$d >/dev/null 2>&1; \
+		if ! $(4) build/$(3)/$$t.elf $$d >/dev/null 2>&1; then \
+			fail=$$((fail+1)); echo "FAIL $(1)-$$t  (hex conversion)"; continue; \
+		fi; \
 		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		th=`echo "$$raw" | sed -n 's/^TOHOST=\([0-9]*\).*/\1/p' | head -1`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
@@ -240,7 +247,7 @@ build/riscv-tests/%.elf: $(RVTESTS_DIR)/%.S $(RVTEST_LD)
 riscv-tests: $(RVTESTS_ELF)
 
 run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
-	$(call run-rvtests,rv32ui,$(RVTESTS),riscv-tests)
+	$(call run-rvtests,rv32ui,$(RVTESTS),riscv-tests,$(HEX_CORE))
 
 # --------------------------------------------------------------------
 # Programs that run from SDRAM, linked against newlib.
@@ -297,14 +304,11 @@ $(EXAMPLES_OUT)/hello.elf: $(RUNTIME_OBJS) $(EXAMPLES_OUT)/hello.o $(RUNTIME_DIR
 
 sdram-progs: $(EXAMPLES_OUT)/hello.elf
 
-# The SDRAM image needs three regions rather than two, so it does not go through
-# elftohex.sh. hello needs about 1.5M cycles, well past the default watchdog.
 # hello runs for about 1.5M cycles, well past the default watchdog
 HELLO_TIMEOUT ?= 5000000
 
-run-sdram-hello: $(EXAMPLES_OUT)/hello.elf $(SIM_IVERILOG)
-	@mkdir -p $(HEX)/examples/hello
-	python3 tools/elf_to_sdram_hex.py $(EXAMPLES_OUT)/hello.elf $(HEX)/examples/hello
+run-sdram-hello: $(EXAMPLES_OUT)/hello.elf $(TOOLS) $(SIM_IVERILOG)
+	$(HEX_SYSTEM) $(EXAMPLES_OUT)/hello.elf $(HEX)/examples/hello
 	cd $(HEX)/examples/hello && $(CURDIR)/$(SIM_IVERILOG) \
 		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(HELLO_TIMEOUT)
 
@@ -324,7 +328,7 @@ build/riscv-tests-m/%.elf: $(RVTESTS_M_DIR)/%.S $(RVTEST_LD)
 riscv-tests-m: $(RVTESTS_M_ELF)
 
 run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
-	$(call run-rvtests,rv32um,$(RVTESTS_M),riscv-tests-m)
+	$(call run-rvtests,rv32um,$(RVTESTS_M),riscv-tests-m,$(HEX_CORE))
 
 # --------------------------------------------------------------------
 # Official riscv-tests rv32mi suite (machine-mode CSRs and exceptions).
@@ -346,7 +350,7 @@ build/riscv-tests-mi/%.elf: $(RVTESTS_MI_DIR)/%.S $(RVTEST_LD)
 riscv-tests-mi: $(RVTESTS_MI_ELF)
 
 run-riscv-tests-mi-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-mi
-	$(call run-rvtests,rv32mi,$(RVTESTS_MI),riscv-tests-mi)
+	$(call run-rvtests,rv32mi,$(RVTESTS_MI),riscv-tests-mi,$(HEX_CORE))
 
 # --------------------------------------------------------------------
 # The same three suites run from SDRAM, so every fetch goes through the
@@ -357,7 +361,6 @@ RVTEST_SDRAM_BOOT  := tests/riscv-tests-env/boot.S
 RVTEST_SDRAM_FLAGS := $(filter-out -T $(RVTEST_LD),$(RVTEST_FLAGS)) -T $(RVTEST_SDRAM_LD) \
                       -Wl,--no-warn-rwx-segments
 RVTEST_SDRAM_OUT   := build/riscv-tests-sdram
-SDRAM_HEX          := python3 tools/elf_to_sdram_hex.py
 
 RVTESTS_SDRAM_ELF := $(addprefix $(RVTEST_SDRAM_OUT)/rv32ui/,$(addsuffix .elf,$(RVTESTS))) \
                      $(addprefix $(RVTEST_SDRAM_OUT)/rv32um/,$(addsuffix .elf,$(RVTESTS_M))) \
@@ -376,10 +379,10 @@ $(eval $(call rvtest-sdram-rule,rv32mi,$(RVTESTS_MI_DIR)))
 
 riscv-tests-sdram: $(RVTESTS_SDRAM_ELF)
 
-run-riscv-tests-sdram-iverilog: $(SIM_IVERILOG) riscv-tests-sdram
-	$(call run-rvtests,rv32ui-sdram,$(RVTESTS),riscv-tests-sdram/rv32ui,$(SDRAM_HEX))
-	$(call run-rvtests,rv32um-sdram,$(RVTESTS_M),riscv-tests-sdram/rv32um,$(SDRAM_HEX))
-	$(call run-rvtests,rv32mi-sdram,$(RVTESTS_MI),riscv-tests-sdram/rv32mi,$(SDRAM_HEX))
+run-riscv-tests-sdram-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-sdram
+	$(call run-rvtests,rv32ui-sdram,$(RVTESTS),riscv-tests-sdram/rv32ui,$(HEX_SYSTEM))
+	$(call run-rvtests,rv32um-sdram,$(RVTESTS_M),riscv-tests-sdram/rv32um,$(HEX_SYSTEM))
+	$(call run-rvtests,rv32mi-sdram,$(RVTESTS_MI),riscv-tests-sdram/rv32mi,$(HEX_SYSTEM))
 
 # Every riscv-tests suite, on-chip and from SDRAM; the default target
 .PHONY: test
@@ -424,7 +427,7 @@ DHRY_TIMEOUT ?= 5000000
 
 .PHONY: run-dhrystone
 run-dhrystone: $(DHRY_OUT)/dhrystone.elf $(TOOLS) $(SIM_IVERILOG)
-	@/bin/bash tools/elftohex.sh $< $(HEX)/dhrystone >/dev/null 2>&1
+	@$(HEX_CORE) $< $(HEX)/dhrystone
 	@cd $(HEX)/dhrystone && $(CURDIR)/$(SIM_IVERILOG) +timeout=$(DHRY_TIMEOUT) \
 		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) 2>/dev/null | \
 	awk -F= '/^CYCLES=/ { c = $$2 } /^RUNS=/ { r = $$2 } \
@@ -460,8 +463,8 @@ coverage: build/cov/Vtop $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi riscv
 	for e in $(RVTESTS_ELF) $(RVTESTS_M_ELF) $(RVTESTS_MI_ELF) $(RVTESTS_SDRAM_ELF); do \
 		t=`echo $$e | sed 's#^build/##; s#\.elf$$##'`; \
 		d=$(HEX)/$$t; c=$(CURDIR)/build/cov/dat/`echo $$t | tr / -`; \
-		case $$e in $(RVTEST_SDRAM_OUT)/*) $(SDRAM_HEX) $$e $$d ;; \
-			*) /bin/bash tools/elftohex.sh $$e $$d ;; esac >/dev/null 2>&1; \
+		case $$e in $(RVTEST_SDRAM_OUT)/*) $(HEX_SYSTEM) $$e $$d ;; \
+			*) $(HEX_CORE) $$e $$d ;; esac >/dev/null; \
 		(cd $$d && RV32_COVERAGE_FILE=$$c.dat \
 			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 		(cd $$d && RV32_STALL_RATE=128 RV32_COVERAGE_FILE=$$c-stall.dat \

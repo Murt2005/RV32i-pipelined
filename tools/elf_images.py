@@ -25,7 +25,7 @@ def find_objcopy():
 
 
 def elf_to_images(elf_path, objcopy=None):
-    """Returns (text_bytes, data_bytes), split the same way as elftohex.sh"""
+    """Returns (text_bytes, data_bytes), split the same way as elftohex-core.sh"""
     objcopy = objcopy or find_objcopy()
     with tempfile.TemporaryDirectory(prefix="rv32elf-") as tmp:
         def extract(args, name):
@@ -56,12 +56,13 @@ def section_image(elf_path, sections, objcopy=None):
             return f.read()
 
 
+# The sections elftohex-system.sh puts in SDRAM, for loading the reference model
 SDRAM_SECTIONS = [".text", ".rodata", ".data"]
 
 
 def sdram_images(elf_path, objcopy=None):
     """Returns (boot_stub, sdram_image) for a program linked to run from SDRAM,
-    or None if it has no .boot stub and so runs from on-chip memory"""
+    or None if it has no .boot stub and so runs in the core configuration"""
     boot = section_image(elf_path, [".boot"], objcopy)
     if not boot:
         return None

@@ -70,9 +70,9 @@ def run_sim_images(text, data, repo_root, timeout_cycles=200000, sim_args=()):
 def run_sim(elf, repo_root, timeout_cycles=200000, sim_args=()):
     # Programs with a .boot stub run from SDRAM and need its images too
     if sdram_images(elf):
-        convert = ["python3", "tools/elf_to_sdram_hex.py"]
+        convert = ["/bin/bash", "tools/elftohex-system.sh"]
     else:
-        convert = ["/bin/bash", "tools/elftohex.sh"]
+        convert = ["/bin/bash", "tools/elftohex-core.sh"]
     with tempfile.TemporaryDirectory(prefix="rv32sim-") as work:
         subprocess.run(convert + [os.path.abspath(elf), work],
                        cwd=repo_root, capture_output=True)
