@@ -19,9 +19,10 @@ git submodule update --init --recursive
 make            # build and run every riscv-tests suite under Icarus Verilog
 ```
 
-You need a RISC-V GCC toolchain (`riscv64-unknown-elf-*`), Icarus Verilog, and
-Python 3. Verilator is only needed for `make coverage`, and the formal flow has
-its own requirements, listed in [`formal/README.md`](formal/README.md).
+You need a RISC-V GCC toolchain (`riscv64-unknown-elf-*`), Icarus Verilog,
+Verilator and Python 3. Co-simulation also needs Spike, which `make spike` builds
+from the `sim/riscv-isa-sim` submodule (it needs `dtc`). The formal flow has its
+own requirements, listed in [`formal/README.md`](formal/README.md).
 
 ## Configurations
 
@@ -91,12 +92,17 @@ This is the simulation top, `rtl/top.sv`.
 |---|---|
 | `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, in the core configuration and then the system configuration |
 | `make run-riscv-tests-iverilog`, `-m-iverilog`, `-mi-iverilog` | One suite, in `CONFIG` |
-| `make rvfi-check` | Replays every retired instruction of every test, in both configurations, through a reference model (`tools/rv32_model.py`) |
+| `make cosim-check` | Every riscv-test in both configurations in lockstep with [Spike](https://github.com/riscv-software-src/riscv-isa-sim), comparing every retired instruction |
+| `make cosim-random ITERS=100 SEED=1` | Random RV32IM programs from `tools/rvgen.py`, in lockstep with Spike, in `CONFIG` |
 | `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
 | `make cycle-check` | Cycle counts against the checked-in baselines for both configurations, to catch timing changes |
 | `make divider-tb` | The divider on its own: every spec corner case plus random operands |
 | `make coverage` | Verilator line and toggle coverage over every suite in both configurations (83%) |
-| `python3 tools/rv32_diff.py` | Random RV32IM programs against the reference model |
+
+`SIM=cosim` runs any suite target through the co-simulator instead of Icarus,
+for example `make run-riscv-tests-iverilog SIM=cosim CONFIG=system`. The
+co-simulator (`sim/cosim.cpp`) steps Spike once for every instruction the core
+retires and stops at the first difference, printing both sides.
 | `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
 Excluded riscv-tests: `fence_i` (instruction and data memories are separate, so
@@ -109,6 +115,11 @@ maps them onto IMEM/DMEM, and `link-system.ld` with the `boot.S` stub runs
 them from SDRAM.
 
 ## Known issues
+
+- **The divider can start with a stale operand behind a slow load.** Random
+  co-simulation in the system configuration found a `remu` whose divisor was
+  loaded two instructions earlier through the data cache, and which computed as
+  if dividing by 0. Reproduce with `make cosim-random CONFIG=system SEED=1039 ITERS=1`.
 
 - **Liveness under external stall.** riscv-formal found a case where a
   one-cycle `stall` with a `jal` in fetch leaves the instruction latched and
@@ -132,8 +143,8 @@ them from SDRAM.
 | `rtl/bus/` | Address decoder, MMIO, instruction and data caches, SDRAM arbiter |
 | `rtl/mem/` | Memory interface and the IMEM/DMEM model, plus a slow-memory wrapper for testing |
 | `rtl/top.sv` | Simulation top |
-| `sim/` | Icarus and Verilator harnesses, divider testbench |
+| `sim/` | Icarus and Verilator harnesses, the co-simulator, divider testbench, and Spike (submodule) |
 | `tests/` | riscv-tests (submodule), its linker script, cycle baseline |
 | `formal/` | riscv-formal harness |
 | `sw/` | Dhrystone and its small C library, and the newlib runtime for SDRAM programs |
-| `tools/` | Reference model, RVFI checker, random tester, ELF-to-hex converters |
+| `tools/` | Random program generator, ELF-to-hex scripts, cycle-count reporter |
