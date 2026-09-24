@@ -23,7 +23,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rv32_model import Rv32Model                      # noqa: E402
-from rv32_host import elf_to_images                   # noqa: E402
+from elf_images import elf_to_images                 # noqa: E402
 
 SIM = "build/sim/result-rvfi"
 

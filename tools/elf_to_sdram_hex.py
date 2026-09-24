@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rv32_host import _find_objcopy                    # noqa: E402
+from elf_images import find_objcopy                    # noqa: E402
 
 REGIONS = [
     # name,     base,        sections to keep
@@ -64,7 +64,7 @@ def main():
     ap.add_argument("out_dir", nargs="?", default=".")
     args = ap.parse_args()
 
-    objcopy = _find_objcopy()
+    objcopy = find_objcopy()
     for name, base, sections in REGIONS:
         img = section_bytes(args.elf, objcopy, sections, base)
         write_lanes(img, name, args.out_dir)
