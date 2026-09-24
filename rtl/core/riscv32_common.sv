@@ -1,5 +1,3 @@
-// The M extension is on unless a build turns it off with -Dext_m_disable
-
 `define tag_size            5
 
 // Package-local alias. `bool` is also declared at compilation-unit scope in
@@ -263,11 +261,7 @@ localparam [11:0] csr_tselect = 12'h7A0;
 localparam [11:0] csr_tdata1  = 12'h7A1;
 localparam [11:0] csr_tdata2  = 12'h7A2;
 
-`ifndef ext_m_disable
 localparam [31:0] misa_value = 32'h4000_1100;
-`else
-localparam [31:0] misa_value = 32'h4000_0100;
-`endif
 
 localparam [31:0] cause_misaligned_fetch = 32'd0;
 localparam [31:0] cause_illegal_instr    = 32'd2;
@@ -310,10 +304,7 @@ function automatic bool is_legal_instruction(instr32 instr);
                           : 1'b1;
         q_op:       legal = (f7 == 7'b0000000)
                          || ((f7 == 7'b0100000) && ((f3 == 3'b000) || (f3 == 3'b101)))
-`ifndef ext_m_disable
-                         || (f7 == f7_ext_mul)
-`endif
-                         ;
+                         || (f7 == f7_ext_mul);
         q_system:   legal = (f3 == 3'b100) ? 1'b0
                           : (f3 != 3'b000) ? 1'b1
                           : (instr == 32'h0000_0073)     // ecall
@@ -432,7 +423,6 @@ function automatic ext_operand execute(
         q_load, q_store, q_amo:    result = operand1 + operand2;
         // The CSR read value is muxed in by the execute stage, which owns the CSR file; nothing useful to compute here.
         q_system, q_misc_mem:  result = 0;
-`ifndef ext_m_disable
         q_op, q_op_imm: if ((op_q == q_op) && (f7 == f7_ext_mul)) begin
             logic signed [32:0] ext_a, ext_b;
             logic signed [65:0] product;
@@ -455,9 +445,6 @@ function automatic ext_operand execute(
                 default:    result = 0;
             endcase
         end else begin
-`else
-        q_op, q_op_imm: begin
-`endif
             case (f3)
                 f3_addsub:
                     if (op_q == q_op_imm)

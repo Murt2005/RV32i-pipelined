@@ -281,7 +281,6 @@ endmodule
 module decode_and_writeback(
     input logic                                 clk,
     input logic                                 reset,
-    input logic                                 clear_regs,     // hold high >=32 cycles to zero the register file
 
     input stage_control_signal_t                decode_control_signal_in,
     input stage_control_signal_t                execute_control_signal_in,
@@ -303,7 +302,6 @@ word register_file[0:31];
 word register_file_bypass_rd;
 tag register_file_bypass_rs;
 bool register_file_bypass_valid;
-tag  clear_idx;
 
 always_comb begin
     register_file_bypass_out.bypass_is_valid = register_file_bypass_valid;
@@ -371,11 +369,6 @@ always_ff @(posedge clk) begin
         register_file_bypass_rd <= writeback_instruction_in.wbd;
         register_file_bypass_valid <= true;
     end
-
-    if (clear_regs)
-        clear_idx <= clear_idx + 5'd1;
-    else
-        clear_idx <= 5'd0;
 end
 
 logic wr_en;
@@ -383,18 +376,12 @@ tag   wr_addr;
 word  wr_data;
 
 always_comb begin
-    if (clear_regs) begin
-        wr_en   = 1'b1;
-        wr_addr = clear_idx;
-        wr_data = `word_size'd0;
-    end else begin
-        wr_en   = !reset
-                  && writeback_control_signal_in.advance
-                  && writeback_instruction_in.is_instruction_valid
-                  && writeback_instruction_in.is_writeback_valid;
-        wr_addr = writeback_instruction_in.wbs;
-        wr_data = writeback_instruction_in.wbd;
-    end
+    wr_en   = !reset
+              && writeback_control_signal_in.advance
+              && writeback_instruction_in.is_instruction_valid
+              && writeback_instruction_in.is_writeback_valid;
+    wr_addr = writeback_instruction_in.wbs;
+    wr_data = writeback_instruction_in.wbd;
 end
 
 always_ff @(posedge clk) begin
@@ -451,7 +438,6 @@ bool mispredict;
 word bypassed_rd1_comb;
 word bypassed_rd2_comb;
 
-`ifndef ext_m_disable
 wire is_div_op = decoded_instruction_in.is_instruction_valid
               && (decoded_instruction_in.instruction_opcode == q_op)
               && (decoded_instruction_in.f7 == f7_ext_mul)
@@ -487,12 +473,6 @@ always @(posedge clk) begin
     if (div_park > 65536)
         $error("%m: divider result parked for %0d cycles and owner never returned", div_park);
 end
-`endif
-`else
-wire                  is_div_op  = 1'b0;
-wire                  div_done   = 1'b0;
-wire [`word_size-1:0] div_result = '0;
-assign div_wait = 1'b0;
 `endif
 
 // Machine-mode CSR file
@@ -1039,7 +1019,6 @@ module core #(
     input logic                                 reset,
 
     input logic                                 stall,
-    input logic                                 clear_regs,     // (hold >=32 cycles)
 
     output logic                                retired,
     input logic                                 [`word_address_size-1:0] reset_pc,
@@ -1114,7 +1093,6 @@ writeback_instruction_t writeback_instruction;
 decode_and_writeback decode_and_writeback_m(
     .clk(clk),
     .reset(reset),
-    .clear_regs(clear_regs),
     .decode_control_signal_in(decode_control_signal),
     .execute_control_signal_in(execute_control_signal),
     .writeback_control_signal_in(writeback_control_signal),

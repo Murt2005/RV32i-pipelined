@@ -103,7 +103,6 @@ module rvfi_wrapper (
         .clk(clock),
         .reset(reset),
         .stall(core_stall),
-        .clear_regs(1'b0),
         .reset_pc(32'h0001_0000),
         .inst_mem_req(inst_req),
         .inst_mem_rsp(inst_rsp),

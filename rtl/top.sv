@@ -45,7 +45,6 @@ core the_core(
 	.clk(clk)
 	,.reset(reset)
 	,.stall(cpu_stall)
-	,.clear_regs(1'b0)
 	,.retired(retired)
     ,.reset_pc(32'h0001_0000)
 	,.inst_mem_req(inst_mem_req)
