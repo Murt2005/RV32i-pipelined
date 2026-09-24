@@ -133,7 +133,7 @@ rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests riscv-tests-m riscv-
 CYCLE_DIR := tests/cycles
 CYCLE_LOG := build/cycles
 CYCLE_SUITES := rv32ui:run-riscv-tests-iverilog \
-                sdram:run-riscv-tests-sdram-iverilog
+                system:run-riscv-tests-system-iverilog
 
 .PHONY: cycle-baseline cycle-check
 
@@ -356,38 +356,38 @@ run-riscv-tests-mi-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-mi
 # The same three suites run from SDRAM, so every fetch goes through the
 # instruction cache and every load and store through the data cache
 # --------------------------------------------------------------------
-RVTEST_SDRAM_LD    := tests/riscv-tests-env/link-sdram.ld
-RVTEST_SDRAM_BOOT  := tests/riscv-tests-env/boot.S
-RVTEST_SDRAM_FLAGS := $(filter-out -T $(RVTEST_LD),$(RVTEST_FLAGS)) -T $(RVTEST_SDRAM_LD) \
-                      -Wl,--no-warn-rwx-segments
-RVTEST_SDRAM_OUT   := build/riscv-tests-sdram
+RVTEST_SYSTEM_LD    := tests/riscv-tests-env/link-system.ld
+RVTEST_SYSTEM_BOOT  := tests/riscv-tests-env/boot.S
+RVTEST_SYSTEM_FLAGS := $(filter-out -T $(RVTEST_LD),$(RVTEST_FLAGS)) -T $(RVTEST_SYSTEM_LD) \
+                       -Wl,--no-warn-rwx-segments
+RVTEST_SYSTEM_OUT   := build/riscv-tests-system
 
-RVTESTS_SDRAM_ELF := $(addprefix $(RVTEST_SDRAM_OUT)/rv32ui/,$(addsuffix .elf,$(RVTESTS))) \
-                     $(addprefix $(RVTEST_SDRAM_OUT)/rv32um/,$(addsuffix .elf,$(RVTESTS_M))) \
-                     $(addprefix $(RVTEST_SDRAM_OUT)/rv32mi/,$(addsuffix .elf,$(RVTESTS_MI)))
+RVTESTS_SYSTEM_ELF := $(addprefix $(RVTEST_SYSTEM_OUT)/rv32ui/,$(addsuffix .elf,$(RVTESTS))) \
+                      $(addprefix $(RVTEST_SYSTEM_OUT)/rv32um/,$(addsuffix .elf,$(RVTESTS_M))) \
+                      $(addprefix $(RVTEST_SYSTEM_OUT)/rv32mi/,$(addsuffix .elf,$(RVTESTS_MI)))
 
-define rvtest-sdram-rule
-$(RVTEST_SDRAM_OUT)/$(1)/%.elf: $(2)/%.S $(RVTEST_SDRAM_LD) $(RVTEST_SDRAM_BOOT)
+define rvtest-system-rule
+$(RVTEST_SYSTEM_OUT)/$(1)/%.elf: $(2)/%.S $(RVTEST_SYSTEM_LD) $(RVTEST_SYSTEM_BOOT)
 	mkdir -p $$(dir $$@)
-	$(CC) $(RVTEST_SDRAM_FLAGS) -o $$@ $$< $(RVTEST_SDRAM_BOOT)
+	$(CC) $(RVTEST_SYSTEM_FLAGS) -o $$@ $$< $(RVTEST_SYSTEM_BOOT)
 endef
-$(eval $(call rvtest-sdram-rule,rv32ui,$(RVTESTS_DIR)))
-$(eval $(call rvtest-sdram-rule,rv32um,$(RVTESTS_M_DIR)))
-$(eval $(call rvtest-sdram-rule,rv32mi,$(RVTESTS_MI_DIR)))
+$(eval $(call rvtest-system-rule,rv32ui,$(RVTESTS_DIR)))
+$(eval $(call rvtest-system-rule,rv32um,$(RVTESTS_M_DIR)))
+$(eval $(call rvtest-system-rule,rv32mi,$(RVTESTS_MI_DIR)))
 
-.PHONY: riscv-tests-sdram run-riscv-tests-sdram-iverilog
+.PHONY: riscv-tests-system run-riscv-tests-system-iverilog
 
-riscv-tests-sdram: $(RVTESTS_SDRAM_ELF)
+riscv-tests-system: $(RVTESTS_SYSTEM_ELF)
 
-run-riscv-tests-sdram-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-sdram
-	$(call run-rvtests,rv32ui-sdram,$(RVTESTS),riscv-tests-sdram/rv32ui,$(HEX_SYSTEM))
-	$(call run-rvtests,rv32um-sdram,$(RVTESTS_M),riscv-tests-sdram/rv32um,$(HEX_SYSTEM))
-	$(call run-rvtests,rv32mi-sdram,$(RVTESTS_MI),riscv-tests-sdram/rv32mi,$(HEX_SYSTEM))
+run-riscv-tests-system-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-system
+	$(call run-rvtests,rv32ui-sdram,$(RVTESTS),riscv-tests-system/rv32ui,$(HEX_SYSTEM))
+	$(call run-rvtests,rv32um-sdram,$(RVTESTS_M),riscv-tests-system/rv32um,$(HEX_SYSTEM))
+	$(call run-rvtests,rv32mi-sdram,$(RVTESTS_MI),riscv-tests-system/rv32mi,$(HEX_SYSTEM))
 
-# Every riscv-tests suite, in the core configuration and from SDRAM; the default target
+# Every riscv-tests suite, in the core and system configurations; the default target
 .PHONY: test
 test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-iverilog \
-      run-riscv-tests-sdram-iverilog
+      run-riscv-tests-system-iverilog
 
 # --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from
@@ -457,13 +457,13 @@ build/cov/Vtop: $(RTL_CORE) sim/verilator_top.cpp
 		--Mdir build/cov -Wno-fatal $(RTL_INC) rtl/top.sv sim/verilator_top.cpp --exe \
 		-o Vtop
 
-coverage: build/cov/Vtop $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi riscv-tests-sdram
+coverage: build/cov/Vtop $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi riscv-tests-system
 	@rm -rf build/cov/dat; mkdir -p build/cov/dat
 	@set -e; n=0; \
-	for e in $(RVTESTS_ELF) $(RVTESTS_M_ELF) $(RVTESTS_MI_ELF) $(RVTESTS_SDRAM_ELF); do \
+	for e in $(RVTESTS_ELF) $(RVTESTS_M_ELF) $(RVTESTS_MI_ELF) $(RVTESTS_SYSTEM_ELF); do \
 		t=`echo $$e | sed 's#^build/##; s#\.elf$$##'`; \
 		d=$(HEX)/$$t; c=$(CURDIR)/build/cov/dat/`echo $$t | tr / -`; \
-		case $$e in $(RVTEST_SDRAM_OUT)/*) $(HEX_SYSTEM) $$e $$d ;; \
+		case $$e in $(RVTEST_SYSTEM_OUT)/*) $(HEX_SYSTEM) $$e $$d ;; \
 			*) $(HEX_CORE) $$e $$d ;; esac >/dev/null; \
 		(cd $$d && RV32_COVERAGE_FILE=$$c.dat \
 			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \

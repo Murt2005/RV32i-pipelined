@@ -86,7 +86,7 @@ be emulated; this core traps instead, which the spec also allows) and
 `pmpaddr` (no physical memory protection).
 
 riscv-tests only need linker scripts from this repo: `tests/riscv-tests-env/link.ld`
-maps them onto IMEM/DMEM, and `link-sdram.ld` with the `boot.S` stub runs
+maps them onto IMEM/DMEM, and `link-system.ld` with the `boot.S` stub runs
 them from SDRAM.
 
 ## Known issues

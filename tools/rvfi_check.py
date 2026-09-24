@@ -209,8 +209,8 @@ def main():
     elfs = []
     if args.all:
         for suite in ("riscv-tests", "riscv-tests-m", "riscv-tests-mi",
-                      "riscv-tests-sdram/rv32ui", "riscv-tests-sdram/rv32um",
-                      "riscv-tests-sdram/rv32mi"):
+                      "riscv-tests-system/rv32ui", "riscv-tests-system/rv32um",
+                      "riscv-tests-system/rv32mi"):
             elfs += sorted(glob.glob(os.path.join(repo_root, f"build/{suite}/*.elf")))
     elif args.elf:
         elfs = [os.path.abspath(args.elf)]
