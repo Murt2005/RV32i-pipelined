@@ -61,13 +61,15 @@ class Rv32Model:
     # that would be two gigabytes. Each entry is (base, size).
     SDRAM_BASE, SDRAM_SIZE = 0x80000000, 1 << 20
 
-    def __init__(self, text, data, text_base=0x00010000, data_base=0x00020000):
+    def __init__(self, text, data, text_base=0x00010000, data_base=0x00020000,
+                 sdram=b""):
         self.mem = bytearray(1 << 18)          # 256 KiB covers both regions
         self.text_base = text_base
         self.data_base = data_base
         self.mem[text_base:text_base + len(text)] = text
         self.mem[data_base:data_base + len(data)] = data
         self.sdram = bytearray(self.SDRAM_SIZE)
+        self.sdram[:len(sdram)] = sdram
         self.x = [0] * 32
         self.pc = text_base
         self.output = bytearray()

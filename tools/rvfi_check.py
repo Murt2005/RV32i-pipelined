@@ -23,7 +23,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rv32_model import Rv32Model                      # noqa: E402
-from elf_images import elf_to_images                 # noqa: E402
+from elf_images import elf_to_images, sdram_images   # noqa: E402
 
 SIM = "build/sim/result-rvfi"
 
@@ -68,8 +68,13 @@ def run_sim_images(text, data, repo_root, timeout_cycles=200000, sim_args=()):
 
 
 def run_sim(elf, repo_root, timeout_cycles=200000, sim_args=()):
+    # Programs with a .boot stub run from SDRAM and need its images too
+    if sdram_images(elf):
+        convert = ["python3", "tools/elf_to_sdram_hex.py"]
+    else:
+        convert = ["/bin/bash", "tools/elftohex.sh"]
     with tempfile.TemporaryDirectory(prefix="rv32sim-") as work:
-        subprocess.run(["/bin/bash", "tools/elftohex.sh", os.path.abspath(elf), work],
+        subprocess.run(convert + [os.path.abspath(elf), work],
                        cwd=repo_root, capture_output=True)
         sim = os.path.abspath(os.path.join(repo_root, SIM))
         return _run_sim_binary(work, timeout_cycles, sim_args, sim=sim)
@@ -101,17 +106,21 @@ def check(elf, repo_root, limit=None, verbose=False, sim_args=(),
     recs = run_sim(elf, repo_root, timeout_cycles=timeout_cycles, sim_args=sim_args)
     if not recs:
         return [f"{os.path.basename(elf)}: no RVFI records"]
+    sdram = sdram_images(elf)
+    if sdram:
+        boot, image = sdram
+        return compare(recs, boot, b"", limit=limit, verbose=verbose, sdram=image)
     text, data = elf_to_images(elf)
     return compare(recs, text, data, limit=limit, verbose=verbose)
 
 
-def compare(recs, text, data, limit=None, verbose=False):
+def compare(recs, text, data, limit=None, verbose=False, sdram=b""):
     """Replay the commit records through the model and report disagreements.
 
     Separated from check() so a caller with its own program -- a randomly
     generated one, say -- can reuse the comparison without producing an ELF.
     """
-    model = Rv32Model(text, data)
+    model = Rv32Model(text, data, sdram=sdram)
     errors = []
 
     for n, r in enumerate(recs):
@@ -199,7 +208,9 @@ def main():
 
     elfs = []
     if args.all:
-        for suite in ("riscv-tests", "riscv-tests-m", "riscv-tests-mi"):
+        for suite in ("riscv-tests", "riscv-tests-m", "riscv-tests-mi",
+                      "riscv-tests-sdram/rv32ui", "riscv-tests-sdram/rv32um",
+                      "riscv-tests-sdram/rv32mi"):
             elfs += sorted(glob.glob(os.path.join(repo_root, f"build/{suite}/*.elf")))
     elif args.elf:
         elfs = [os.path.abspath(args.elf)]

@@ -39,3 +39,30 @@ def elf_to_images(elf_path, objcopy=None):
         # .bss is zero by definition, and including it would pad the image
         data = extract(["-R", ".text", "-R", ".bss", "-O", "binary"], "data.bin")
     return text, data
+
+
+def section_image(elf_path, sections, objcopy=None):
+    """The named sections as one flat image, or b"" if none of them exist"""
+    objcopy = objcopy or find_objcopy()
+    with tempfile.TemporaryDirectory(prefix="rv32elf-") as tmp:
+        out = os.path.join(tmp, "region.bin")
+        args = [objcopy, "-O", "binary"]
+        for s in sections:
+            args += ["-j", s]
+        r = subprocess.run(args + [elf_path, out], capture_output=True)
+        if r.returncode != 0 or not os.path.exists(out):
+            return b""
+        with open(out, "rb") as f:
+            return f.read()
+
+
+SDRAM_SECTIONS = [".text", ".rodata", ".data"]
+
+
+def sdram_images(elf_path, objcopy=None):
+    """Returns (boot_stub, sdram_image) for a program linked to run from SDRAM,
+    or None if it has no .boot stub and so runs from on-chip memory"""
+    boot = section_image(elf_path, [".boot"], objcopy)
+    if not boot:
+        return None
+    return boot, section_image(elf_path, SDRAM_SECTIONS, objcopy)

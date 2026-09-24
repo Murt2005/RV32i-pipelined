@@ -127,7 +127,8 @@ rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests riscv-tests-m riscv-
 # tests a pipeline change moved and by how much.
 CYCLE_DIR := tests/cycles
 CYCLE_LOG := build/cycles
-CYCLE_SUITES := rv32ui:run-riscv-tests-iverilog
+CYCLE_SUITES := rv32ui:run-riscv-tests-iverilog \
+                sdram:run-riscv-tests-sdram-iverilog
 
 .PHONY: cycle-baseline cycle-check
 
@@ -209,12 +210,12 @@ RVTEST_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-built
                 -Itests/riscv-tests/env/p -Itests/riscv-tests/env \
                 -Itests/riscv-tests/isa/macros/scalar -T $(RVTEST_LD)
 
-# $(call run-rvtests,suite,tests,elf-dir)
+# $(call run-rvtests,suite,tests,elf-dir[,hex-converter])
 define run-rvtests
 @pass=0; fail=0; \
 	for t in $(2); do \
 		d=$(HEX)/$(3)/$$t; \
-		/bin/bash tools/elftohex.sh build/$(3)/$$t.elf $$d >/dev/null 2>&1; \
+		$(if $(4),$(4),/bin/bash tools/elftohex.sh) build/$(3)/$$t.elf $$d >/dev/null 2>&1; \
 		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
 		th=`echo "$$raw" | sed -n 's/^TOHOST=\([0-9]*\).*/\1/p' | head -1`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
@@ -347,9 +348,43 @@ riscv-tests-mi: $(RVTESTS_MI_ELF)
 run-riscv-tests-mi-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-mi
 	$(call run-rvtests,rv32mi,$(RVTESTS_MI),riscv-tests-mi)
 
-# Every riscv-tests suite; the default target
+# --------------------------------------------------------------------
+# The same three suites run from SDRAM, so every fetch goes through the
+# instruction cache and every load and store through the data cache
+# --------------------------------------------------------------------
+RVTEST_SDRAM_LD    := tests/riscv-tests-env/link-sdram.ld
+RVTEST_SDRAM_BOOT  := tests/riscv-tests-env/boot.S
+RVTEST_SDRAM_FLAGS := $(filter-out -T $(RVTEST_LD),$(RVTEST_FLAGS)) -T $(RVTEST_SDRAM_LD) \
+                      -Wl,--no-warn-rwx-segments
+RVTEST_SDRAM_OUT   := build/riscv-tests-sdram
+SDRAM_HEX          := python3 tools/elf_to_sdram_hex.py
+
+RVTESTS_SDRAM_ELF := $(addprefix $(RVTEST_SDRAM_OUT)/rv32ui/,$(addsuffix .elf,$(RVTESTS))) \
+                     $(addprefix $(RVTEST_SDRAM_OUT)/rv32um/,$(addsuffix .elf,$(RVTESTS_M))) \
+                     $(addprefix $(RVTEST_SDRAM_OUT)/rv32mi/,$(addsuffix .elf,$(RVTESTS_MI)))
+
+define rvtest-sdram-rule
+$(RVTEST_SDRAM_OUT)/$(1)/%.elf: $(2)/%.S $(RVTEST_SDRAM_LD) $(RVTEST_SDRAM_BOOT)
+	mkdir -p $$(dir $$@)
+	$(CC) $(RVTEST_SDRAM_FLAGS) -o $$@ $$< $(RVTEST_SDRAM_BOOT)
+endef
+$(eval $(call rvtest-sdram-rule,rv32ui,$(RVTESTS_DIR)))
+$(eval $(call rvtest-sdram-rule,rv32um,$(RVTESTS_M_DIR)))
+$(eval $(call rvtest-sdram-rule,rv32mi,$(RVTESTS_MI_DIR)))
+
+.PHONY: riscv-tests-sdram run-riscv-tests-sdram-iverilog
+
+riscv-tests-sdram: $(RVTESTS_SDRAM_ELF)
+
+run-riscv-tests-sdram-iverilog: $(SIM_IVERILOG) riscv-tests-sdram
+	$(call run-rvtests,rv32ui-sdram,$(RVTESTS),riscv-tests-sdram/rv32ui,$(SDRAM_HEX))
+	$(call run-rvtests,rv32um-sdram,$(RVTESTS_M),riscv-tests-sdram/rv32um,$(SDRAM_HEX))
+	$(call run-rvtests,rv32mi-sdram,$(RVTESTS_MI),riscv-tests-sdram/rv32mi,$(SDRAM_HEX))
+
+# Every riscv-tests suite, on-chip and from SDRAM; the default target
 .PHONY: test
-test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-iverilog
+test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-iverilog \
+      run-riscv-tests-sdram-iverilog
 
 # --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from
@@ -419,13 +454,14 @@ build/cov/Vtop: $(RTL_CORE) sim/verilator_top.cpp
 		--Mdir build/cov -Wno-fatal $(RTL_INC) rtl/top.sv sim/verilator_top.cpp --exe \
 		-o Vtop
 
-coverage: build/cov/Vtop $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi
+coverage: build/cov/Vtop $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi riscv-tests-sdram
 	@rm -rf build/cov/dat; mkdir -p build/cov/dat
 	@set -e; n=0; \
-	for e in $(RVTESTS_ELF) $(RVTESTS_M_ELF) $(RVTESTS_MI_ELF); do \
+	for e in $(RVTESTS_ELF) $(RVTESTS_M_ELF) $(RVTESTS_MI_ELF) $(RVTESTS_SDRAM_ELF); do \
 		t=`echo $$e | sed 's#^build/##; s#\.elf$$##'`; \
 		d=$(HEX)/$$t; c=$(CURDIR)/build/cov/dat/`echo $$t | tr / -`; \
-		/bin/bash tools/elftohex.sh $$e $$d >/dev/null 2>&1; \
+		case $$e in $(RVTEST_SDRAM_OUT)/*) $(SDRAM_HEX) $$e $$d ;; \
+			*) /bin/bash tools/elftohex.sh $$e $$d ;; esac >/dev/null 2>&1; \
 		(cd $$d && RV32_COVERAGE_FILE=$$c.dat \
 			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
 		(cd $$d && RV32_STALL_RATE=128 RV32_COVERAGE_FILE=$$c-stall.dat \

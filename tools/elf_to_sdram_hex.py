@@ -15,37 +15,18 @@ reads them anyway) and sdram0..3.hex.
 
 import argparse
 import os
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from elf_images import find_objcopy                    # noqa: E402
+from elf_images import find_objcopy, section_image, SDRAM_SECTIONS  # noqa: E402
 
 REGIONS = [
     # name,     base,        sections to keep
     ("code",  0x00010000, [".boot"]),
     ("data",  0x00020000, []),
-    ("sdram", 0x80000000, [".text", ".rodata", ".data"]),
+    ("sdram", 0x80000000, SDRAM_SECTIONS),
 ]
-
-
-def section_bytes(elf, objcopy, sections, base):
-    """Extract `sections` as a flat image based at `base`."""
-    if not sections:
-        return b""
-    args = [objcopy, "-O", "binary"]
-    for s in sections:
-        args += ["-j", s]
-    tmp = elf + ".region.bin"
-    args += [elf, tmp]
-    r = subprocess.run(args, capture_output=True, text=True)
-    if r.returncode != 0 or not os.path.exists(tmp):
-        return b""
-    with open(tmp, "rb") as f:
-        data = f.read()
-    os.unlink(tmp)
-    return data
 
 
 def write_lanes(image, prefix, out_dir):
@@ -65,8 +46,9 @@ def main():
     args = ap.parse_args()
 
     objcopy = find_objcopy()
+    os.makedirs(args.out_dir, exist_ok=True)
     for name, base, sections in REGIONS:
-        img = section_bytes(args.elf, objcopy, sections, base)
+        img = section_image(args.elf, sections, objcopy) if sections else b""
         write_lanes(img, name, args.out_dir)
         print(f"{name}: {len(img)} bytes")
     return 0
