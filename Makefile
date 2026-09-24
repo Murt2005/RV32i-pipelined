@@ -464,6 +464,19 @@ $(SPIKE_PREFIX)/bin/spike:
 	MAKEFLAGS= $(MAKE) -C build/spike-build install
 
 # --------------------------------------------------------------------
+# Lockstep co-simulation against Spike: sim/cosim.cpp steps Spike once for
+# every instruction the core retires and stops at the first difference
+# --------------------------------------------------------------------
+COSIM := build/cosim/Vcosim_top
+
+$(COSIM): $(RTL_CORE) sim/cosim_top.sv sim/cosim.cpp $(SPIKE_PREFIX)/bin/spike
+	mkdir -p build/cosim
+	$(VERILATOR) -O3 --cc --build --exe --top-module cosim_top -Wno-fatal -DRVFI \
+		--Mdir build/cosim $(RTL_INC) sim/cosim_top.sv sim/cosim.cpp -o Vcosim_top \
+		-CFLAGS "-std=c++20 -I$(SPIKE_PREFIX)/include" \
+		-LDFLAGS "-L$(SPIKE_PREFIX)/lib -Wl,-rpath,$(SPIKE_PREFIX)/lib -lriscv -lfesvr"
+
+# --------------------------------------------------------------------
 # The divider's arithmetic on its own: every spec corner plus random pairs
 # --------------------------------------------------------------------
 .PHONY: divider-tb
