@@ -21,7 +21,7 @@ make            # build and run every riscv-tests suite under Icarus Verilog
 
 You need a RISC-V GCC toolchain (`riscv64-unknown-elf-*`), Icarus Verilog,
 Verilator and Python 3. Co-simulation also needs Spike, which `make spike` builds
-from the `sim/riscv-isa-sim` submodule (it needs `dtc`). The formal flow has its
+from the `cosim/riscv-isa-sim` submodule (it needs `dtc`). The formal flow has its
 own requirements, listed in [`formal/README.md`](formal/README.md).
 
 ## Configurations
@@ -77,7 +77,7 @@ Accessing any other CSR, or writing a read-only one, is an illegal instruction.
 
 ### Memory map
 
-This is the simulation top, `rtl/top.sv`.
+This is the simulation top, `sim/top.sv`.
 
 | Address | What |
 |---|---|
@@ -101,7 +101,7 @@ This is the simulation top, `rtl/top.sv`.
 
 `SIM=cosim` runs any suite target through the co-simulator instead of Icarus,
 for example `make run-riscv-tests-iverilog SIM=cosim CONFIG=system`. The
-co-simulator (`sim/cosim.cpp`) steps Spike once for every instruction the core
+co-simulator (`cosim/cosim.cpp`) steps Spike once for every instruction the core
 retires and stops at the first difference, printing both sides.
 | `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
@@ -140,10 +140,10 @@ them from SDRAM.
 |---|---|
 | `rtl/core/` | The core: pipeline (`cpu.sv`), divider, ISA decode |
 | `rtl/bus/` | Address decoder, MMIO, instruction and data caches, SDRAM arbiter |
-| `rtl/mem/` | Memory interface and the IMEM/DMEM model, plus a slow-memory wrapper for testing |
-| `rtl/top.sv` | Simulation top |
-| `sim/` | Icarus and Verilator harnesses, the co-simulator, divider testbench, and Spike (submodule) |
-| `tests/` | riscv-tests (submodule), its linker script, cycle baseline |
+| `rtl/mem/` | Memory interface |
+| `sim/` | Simulation top, memory model with optional random latency, Icarus and Verilator harnesses |
+| `cosim/` | Lockstep co-simulator against Spike, and Spike (submodule) |
+| `tests/` | riscv-tests (submodule), its linker script, cycle baseline, divider testbench |
 | `formal/` | riscv-formal harness |
 | `bench/` | Dhrystone and the small C library it links against |
 | `tools/` | Random program generator, ELF-to-hex scripts, cycle-count reporter |

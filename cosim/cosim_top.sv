@@ -1,7 +1,7 @@
 `include "top.sv"
 
 // Co-simulation top: the simulation top with the core's RVFI commit port brought out,
-// so sim/cosim.cpp can check every retired instruction against Spike
+// so cosim/cosim.cpp can check every retired instruction against Spike
 
 module cosim_top(
     input  logic        clk,

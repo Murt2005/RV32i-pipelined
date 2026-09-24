@@ -111,10 +111,12 @@ build/tools/dumphex: tools/dumphex.c
 # the edit having no effect. A wildcard cannot fall behind.
 #
 # Every `include names a bare file, so the include path is what resolves them.
-RTL_DIRS := rtl rtl/core rtl/mem rtl/bus
-RTL_INC  := $(addprefix -I,$(RTL_DIRS))
+# sim/ holds the simulated machine around the design: top, memories, harness.
+RTL_DIRS := rtl/core rtl/mem rtl/bus
+RTL_INC  := $(addprefix -I,$(RTL_DIRS)) -Isim
 RTL_CORE := $(foreach d,$(RTL_DIRS),$(wildcard $(d)/*.sv))
-RTL_SRC  := sim/itop.sv $(RTL_CORE)
+SIM_SV   := $(wildcard sim/*.sv)
+RTL_SRC  := $(RTL_CORE) $(SIM_SV)
 
 $(SIM_IVERILOG): $(RTL_SRC)
 	mkdir -p $(dir $@)
@@ -379,9 +381,9 @@ run-dhrystone: $(DHRY_OUT)/dhrystone.elf $(TOOLS) $(SIM_IVERILOG)
 
 # --------------------------------------------------------------------
 # Spike, the reference simulator for co-simulation, built from the pinned
-# sim/riscv-isa-sim submodule into build/spike
+# cosim/riscv-isa-sim submodule into build/spike
 # --------------------------------------------------------------------
-SPIKE_SRC    := sim/riscv-isa-sim
+SPIKE_SRC    := cosim/riscv-isa-sim
 SPIKE_PREFIX := $(CURDIR)/build/spike
 SPIKE_JOBS   := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
@@ -395,13 +397,13 @@ $(SPIKE_PREFIX)/bin/spike:
 	MAKEFLAGS= $(MAKE) -C build/spike-build install
 
 # --------------------------------------------------------------------
-# Lockstep co-simulation against Spike: sim/cosim.cpp steps Spike once for
+# Lockstep co-simulation against Spike: cosim/cosim.cpp steps Spike once for
 # every instruction the core retires and stops at the first difference
 # --------------------------------------------------------------------
-$(COSIM): $(RTL_CORE) sim/cosim_top.sv sim/cosim.cpp $(SPIKE_PREFIX)/bin/spike
+$(COSIM): $(RTL_SRC) cosim/cosim_top.sv cosim/cosim.cpp $(SPIKE_PREFIX)/bin/spike
 	mkdir -p build/cosim
 	$(VERILATOR) -O3 --cc --build --exe --top-module cosim_top -Wno-fatal -DRVFI \
-		--Mdir build/cosim $(RTL_INC) sim/cosim_top.sv sim/cosim.cpp -o Vcosim_top \
+		--Mdir build/cosim $(RTL_INC) cosim/cosim_top.sv cosim/cosim.cpp -o Vcosim_top \
 		-CFLAGS "-std=c++20 -I$(SPIKE_PREFIX)/include" \
 		-LDFLAGS "-L$(SPIKE_PREFIX)/lib -Wl,-rpath,$(SPIKE_PREFIX)/lib -lriscv -lfesvr"
 
@@ -436,9 +438,9 @@ cosim-random: $(COSIM) $(TOOLS)
 # --------------------------------------------------------------------
 .PHONY: divider-tb
 
-build/sim/tb_divider: sim/tb_divider.sv rtl/core/divider.sv rtl/core/system.sv
+build/sim/tb_divider: tests/tb_divider.sv rtl/core/divider.sv rtl/core/system.sv
 	mkdir -p $(dir $@)
-	$(IVERILOG) -g2012 -Irtl/core -o $@ sim/tb_divider.sv
+	$(IVERILOG) -g2012 -Irtl/core -o $@ tests/tb_divider.sv
 
 divider-tb: build/sim/tb_divider
 	./build/sim/tb_divider
@@ -448,10 +450,10 @@ divider-tb: build/sim/tb_divider
 # --------------------------------------------------------------------
 .PHONY: coverage
 
-build/cov/Vtop: $(RTL_CORE) sim/verilator_top.cpp
+build/cov/Vtop: $(RTL_SRC) sim/verilator_top.cpp
 	mkdir -p build/cov
 	$(VERILATOR) -O0 --cc --build --top-module top --coverage \
-		--Mdir build/cov -Wno-fatal $(RTL_INC) rtl/top.sv sim/verilator_top.cpp --exe \
+		--Mdir build/cov -Wno-fatal $(RTL_INC) sim/top.sv sim/verilator_top.cpp --exe \
 		-o Vtop
 
 coverage: build/cov/Vtop $(TOOLS)

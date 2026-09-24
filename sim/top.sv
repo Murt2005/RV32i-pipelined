@@ -1,6 +1,5 @@
 `include "base.sv"
 `include "memory.sv"
-`include "memory_delay.sv"
 `include "memory_map.sv"
 `include "decoder.sv"
 `include "mmio.sv"
@@ -96,14 +95,14 @@ bus_decoder #(
     .sdram_req(d_sdram_req), .sdram_rsp(d_sdram_rsp)
 );
 
-memory_delay #(
+memory32 #(
     .size(32'h0001_0000)
     ,.initialize_mem(true)
     ,.byte0("code0.hex")
     ,.byte1("code1.hex")
     ,.byte2("code2.hex")
     ,.byte3("code3.hex")
-    ,.enable_rsp_addr(true)
+    ,.seed(16'h1D2B)
     ) code_mem (
     .clk(clk)
     ,.reset(reset)
@@ -112,14 +111,14 @@ memory_delay #(
     ,.rsp(i_imem_rsp)
     );
 
-memory_delay #(
+memory32 #(
     .size(32'h0001_0000)
     ,.initialize_mem(true)
     ,.byte0("data0.hex")
     ,.byte1("data1.hex")
     ,.byte2("data2.hex")
     ,.byte3("data3.hex")
-    ,.enable_rsp_addr(true)
+    ,.seed(16'h7A35)
     ) data_mem (
     .clk(clk)
     ,.reset(reset)
@@ -155,14 +154,14 @@ bus_arbiter sdram_arb(
     .t_req(sdram_req),  .t_rsp(sdram_rsp)
 );
 
-memory_delay #(
+memory32 #(
     .size(sdram_bytes)
     ,.initialize_mem(true)
     ,.byte0("sdram0.hex")
     ,.byte1("sdram1.hex")
     ,.byte2("sdram2.hex")
     ,.byte3("sdram3.hex")
-    ,.enable_rsp_addr(true)
+    ,.seed(16'hC3E9)
     ) sdram (
     .clk(clk)
     ,.reset(reset)
