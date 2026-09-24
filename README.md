@@ -133,7 +133,6 @@ them from SDRAM.
 | Command | What |
 |---|---|
 | `make run-dhrystone` | Dhrystone in `CONFIG`: 0.842 DMIPS/MHz in core, 0.768 in system |
-| `make run-sdram-hello` | A newlib C program running from SDRAM |
 
 ## Layout
 
@@ -146,5 +145,5 @@ them from SDRAM.
 | `sim/` | Icarus and Verilator harnesses, the co-simulator, divider testbench, and Spike (submodule) |
 | `tests/` | riscv-tests (submodule), its linker script, cycle baseline |
 | `formal/` | riscv-formal harness |
-| `sw/` | Dhrystone and its small C library, and the newlib runtime for SDRAM programs |
+| `bench/` | Dhrystone and the small C library it links against |
 | `tools/` | Random program generator, ELF-to-hex scripts, cycle-count reporter |

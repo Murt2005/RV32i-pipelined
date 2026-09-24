@@ -2,28 +2,28 @@
 
 include site-config.sh
 
-# Without this the first rule in the file, sw/libmc/libmc.a, would be the default.
+# Without this the first rule in the file, bench/libmc/libmc.a, would be the default.
 .DEFAULT_GOAL := test
 
 CC=$(RISCV_PREFIX)-gcc
 AS=$(RISCV_PREFIX)-as
 LD=$(RISCV_PREFIX)-ld
 
-# MARCH/MABI come from site-config.sh, so this file and sw/libmc/Makefile cannot
+# MARCH/MABI come from site-config.sh, so this file and bench/libmc/Makefile cannot
 # drift apart. -mabi is now explicit everywhere: it is the default for rv32i so
 # omitting it happened to work, but RISCV_LIB points at one specific multilib
 # directory and the two have to agree.
-# GCC 15 defaults to C23, where bool/true/false are keywords -- and sw/libmc/base.h
+# GCC 15 defaults to C23, where bool/true/false are keywords -- and bench/libmc/base.h
 # has `typedef unsigned int bool`, which C23 rejects outright. Pinning the
 # standard keeps this legacy C compiling with exactly the semantics it was
 # written against, including a 4-byte bool, rather than quietly changing type
-# sizes underneath it. sw/libmc/Makefile already pins gnu99 for the same reason.
+# sizes underneath it. bench/libmc/Makefile already pins gnu99 for the same reason.
 # Nothing caught this until a C program was built, because every test in the
 # regression suite is hand-written assembly.
 CSTD=-std=gnu17
 
 SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
-LDPOSTFLAGS= -Lsw/libmc -lmc -L$(RISCV_LIB) -lgcc
+LDPOSTFLAGS= -Lbench/libmc -lmc -L$(RISCV_LIB) -lgcc
 TOOLS=build/tools/dumphex
 
 # ELF to hex images: the core configuration (IMEM and DMEM) and the system
@@ -39,19 +39,19 @@ CONFIG ?= core
 ifeq ($(CONFIG),core)
 HEX_CONFIG   := $(HEX_CORE)
 RVTEST_LD    := tests/riscv-tests-env/link.ld
-BENCH_LD     := sw/bench/link.ld
+BENCH_LD     := bench/link.ld
 CONFIG_BOOT  :=
 SUITE_SUFFIX :=
 else ifeq ($(CONFIG),system)
 HEX_CONFIG   := $(HEX_SYSTEM)
 RVTEST_LD    := tests/riscv-tests-env/link-system.ld
-BENCH_LD     := sw/bench/link-system.ld
+BENCH_LD     := bench/link-system.ld
 CONFIG_BOOT  := tests/riscv-tests-env/boot.S
 SUITE_SUFFIX := -sdram
 else
 $(error CONFIG must be core or system)
 endif
-LIBS=sw/libmc/libmc.a
+LIBS=bench/libmc/libmc.a
 
 SIM_IVERILOG := build/sim/result-iverilog
 COSIM        := build/cosim/Vcosim_top
@@ -94,12 +94,12 @@ SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_T
 
 
 # Rebuilt when its sources or its ISA change, so a stale archive is never linked
-LIBMC_SRC := $(wildcard sw/libmc/*.c) $(wildcard sw/libmc/*.s) $(wildcard sw/libmc/*.h) \
-             sw/libmc/Makefile site-config.sh Makefile
+LIBMC_SRC := $(wildcard bench/libmc/*.c) $(wildcard bench/libmc/*.s) $(wildcard bench/libmc/*.h) \
+             bench/libmc/Makefile site-config.sh Makefile
 
-sw/libmc/libmc.a: $(LIBMC_SRC)
-	$(MAKE) -C sw/libmc clean
-	$(MAKE) -C sw/libmc
+bench/libmc/libmc.a: $(LIBMC_SRC)
+	$(MAKE) -C bench/libmc clean
+	$(MAKE) -C bench/libmc
 
 build/tools/dumphex: tools/dumphex.c
 	mkdir -p $(dir $@)
@@ -202,7 +202,7 @@ latency-sweep: $(TOOLS) $(SIM_IVERILOG)
 
 clean:
 	rm -rf build
-	$(MAKE) -C sw/libmc clean
+	$(MAKE) -C bench/libmc clean
 
 
 # --------------------------------------------------------------------
@@ -283,69 +283,6 @@ run-riscv-tests-iverilog: $(TOOLS) $(SIM_BIN) riscv-tests
 	$(call run-rvtests,rv32ui$(SUITE_SUFFIX),$(RVTESTS),$(CONFIG)/riscv-tests/rv32ui,$(HEX_CONFIG))
 
 # --------------------------------------------------------------------
-# Programs that run from SDRAM, linked against newlib.
-#
-# Anything with a C library in it is far too large for the 64 KiB IMEM, so these
-# link .text, .rodata, .data and .bss into SDRAM and leave only a reset stub at
-# 0x00010000.
-#
-# newlib rather than libmc: libmc has no malloc, no file I/O and no memcpy, and
-# its printf drops the `l` in %ld. libmc is untouched and Dhrystone still uses it.
-#
-# sw/runtime is the reset stub, syscalls and linker script every such program
-# shares; sw/examples holds the small programs that exercise it.
-# --------------------------------------------------------------------
-RUNTIME_DIR  := sw/runtime
-RUNTIME_OUT  := build/sw/runtime
-EXAMPLES_DIR := sw/examples
-EXAMPLES_OUT := build/sw/examples
-
-# -mstrict-align is not optional on this core. RISC-V leaves misaligned access
-# implementation-defined and GCC assumes it works, so it will happily emit an
-# unaligned word load to copy a struct. This core traps instead, and mtvec is
-# zero, so the trap lands on unmapped memory and the machine wedges executing
-# illegal instructions -- a long way from the store that caused it.
-SDRAM_CFLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Wall -mstrict-align \
-                -ffunction-sections -fdata-sections
-SDRAM_LDFLAGS := -m $(LDEMUL) -T $(RUNTIME_DIR)/link.ld --gc-sections
-
-# newlib and libgcc for this multilib. Order matters: libc needs libgcc, and the
-# syscalls object has to come before libc so the linker resolves _write and the
-# rest from here rather than pulling in newlib's stubs.
-NEWLIB_DIR := $(shell $(CC) -march=$(MARCH) -mabi=$(MABI) -print-sysroot)/lib/rv32im/ilp32
-SDRAM_LIBS := -L$(NEWLIB_DIR) -lc -lm -L$(RISCV_LIB) -lgcc
-
-.PHONY: sdram-progs run-sdram-hello
-
-RUNTIME_OBJS := $(RUNTIME_OUT)/boot.o $(RUNTIME_OUT)/syscalls.o
-
-$(RUNTIME_OUT)/%.o: $(RUNTIME_DIR)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(SDRAM_CFLAGS) -c $< -o $@
-
-$(RUNTIME_OUT)/%.o: $(RUNTIME_DIR)/%.s
-	@mkdir -p $(dir $@)
-	$(AS) -march=$(MARCH) -mabi=$(MABI) -c $< -o $@
-
-$(EXAMPLES_OUT)/%.o: $(EXAMPLES_DIR)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(SDRAM_CFLAGS) -c $< -o $@
-
-$(EXAMPLES_OUT)/hello.elf: $(RUNTIME_OBJS) $(EXAMPLES_OUT)/hello.o $(RUNTIME_DIR)/link.ld
-	@mkdir -p $(dir $@)
-	$(LD) $(SDRAM_LDFLAGS) -o $@ $(RUNTIME_OBJS) $(EXAMPLES_OUT)/hello.o $(SDRAM_LIBS)
-
-sdram-progs: $(EXAMPLES_OUT)/hello.elf
-
-# hello runs for about 1.5M cycles, well past the default watchdog
-HELLO_TIMEOUT ?= 5000000
-
-run-sdram-hello: $(EXAMPLES_OUT)/hello.elf $(TOOLS) $(SIM_IVERILOG)
-	$(HEX_SYSTEM) $(EXAMPLES_OUT)/hello.elf $(HEX)/examples/hello
-	cd $(HEX)/examples/hello && $(CURDIR)/$(SIM_IVERILOG) \
-		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(HELLO_TIMEOUT)
-
-# --------------------------------------------------------------------
 # Official riscv-tests rv32um suite (M extension).
 # --------------------------------------------------------------------
 RVTESTS_M_DIR := tests/riscv-tests/isa/rv32um
@@ -393,16 +330,16 @@ test:
 # --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from
 # tests/riscv-tests/benchmarks/dhrystone (a number is only comparable if the
-# benchmark is); sw/bench/dhrystone/port.c supplies what this bare-metal
+# benchmark is); bench/dhrystone/port.c supplies what this bare-metal
 # machine does not already have, and rv_env.h replaces the riscv-tests util.h.
 #
 # Timing comes from the mcycle CSR, which dhrystone.h already selects for
 # __riscv. -O2 with the source's own no-inline pragma is the conventional
 # Dhrystone build.
 # --------------------------------------------------------------------
-DHRY_DIR  := sw/bench/dhrystone
-DHRY_OUT  := build/$(CONFIG)/sw/bench/dhrystone
-DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Isw/libmc -I$(DHRY_DIR) \
+DHRY_DIR  := bench/dhrystone
+DHRY_OUT  := build/$(CONFIG)/bench/dhrystone
+DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Ibench/libmc -I$(DHRY_DIR) \
               -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
               -Wno-implicit-int -Wno-return-type
 DHRY_OBJS := $(DHRY_OUT)/crt0.o $(DHRY_OUT)/dhrystone.o \
