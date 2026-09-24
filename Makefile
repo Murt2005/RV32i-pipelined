@@ -492,6 +492,26 @@ cosim-check:
 	@$(MAKE) --no-print-directory CONFIG=core SIM=cosim $(RVTEST_RUNS)
 	@$(MAKE) --no-print-directory CONFIG=system SIM=cosim $(RVTEST_RUNS)
 
+# Random programs in lockstep with Spike, in CONFIG; a failing one is kept with its seed
+#   make cosim-random ITERS=100 SEED=1 LENGTH=200
+ITERS  ?= 50
+SEED   ?= 1
+LENGTH ?= 200
+RVGEN_OUT := build/$(CONFIG)/rvgen
+
+.PHONY: cosim-random
+cosim-random: $(COSIM) $(TOOLS)
+	@pass=0; for i in `seq $(SEED) $$(($(SEED) + $(ITERS) - 1))`; do \
+		d=$(RVGEN_OUT)/$$i; mkdir -p $$d; \
+		python3 tools/rvgen.py $$i $(LENGTH) > $$d/prog.S; \
+		$(CC) $(RVTEST_FLAGS) -o $$d/prog.elf $$d/prog.S $(CONFIG_BOOT) || exit 1; \
+		$(HEX_CONFIG) $$d/prog.elf $$d >/dev/null 2>&1 || exit 1; \
+		out=`cd $$d && $(CURDIR)/$(COSIM) prog.elf $(SIM_ARGS) 2>/dev/null`; \
+		if echo "$$out" | grep -q "^TOHOST=1$$"; then pass=$$((pass+1)); rm -rf $$d; \
+		else echo "FAIL seed $$i: `echo "$$out" | grep -E '^(MISMATCH|TIMEOUT)'`"; \
+			echo "  program kept in $$d"; exit 1; fi; \
+	done; echo "$(CONFIG): $$pass random programs match"
+
 # --------------------------------------------------------------------
 # The divider's arithmetic on its own: every spec corner plus random pairs
 # --------------------------------------------------------------------
