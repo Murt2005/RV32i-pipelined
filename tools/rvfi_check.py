@@ -9,7 +9,7 @@ by replaying every retired instruction through tools/rv32_model.py and comparing
 the fields the formal checks depend on.
 
     make build/sim/result-rvfi
-    python3 tools/rvfi_check.py build/riscv-tests/add.elf
+    python3 tools/rvfi_check.py build/core/riscv-tests/rv32ui/add.elf
     python3 tools/rvfi_check.py --all
 """
 
@@ -208,10 +208,10 @@ def main():
 
     elfs = []
     if args.all:
-        for suite in ("riscv-tests", "riscv-tests-m", "riscv-tests-mi",
-                      "riscv-tests-system/rv32ui", "riscv-tests-system/rv32um",
-                      "riscv-tests-system/rv32mi"):
-            elfs += sorted(glob.glob(os.path.join(repo_root, f"build/{suite}/*.elf")))
+        for config in ("core", "system"):
+            for suite in ("rv32ui", "rv32um", "rv32mi"):
+                elfs += sorted(glob.glob(os.path.join(
+                    repo_root, f"build/{config}/riscv-tests/{suite}/*.elf")))
     elif args.elf:
         elfs = [os.path.abspath(args.elf)]
     else:

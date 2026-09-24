@@ -30,6 +30,27 @@ TOOLS=build/tools/dumphex
 # configuration (a boot stub in IMEM, the program in SDRAM through the caches)
 HEX_CORE   := /bin/bash tools/elftohex-core.sh
 HEX_SYSTEM := /bin/bash tools/elftohex-system.sh
+
+# Which configuration programs are built and run in, each with its own build folder
+#   make CONFIG=core    IMEM and DMEM, for developing and benchmarking the core
+#   make CONFIG=system  a boot stub in IMEM and the program in SDRAM, through the caches
+# System test names keep the -sdram suffix that tests/cycles/system.json is keyed on
+CONFIG ?= core
+ifeq ($(CONFIG),core)
+HEX_CONFIG   := $(HEX_CORE)
+RVTEST_LD    := tests/riscv-tests-env/link.ld
+BENCH_LD     := sw/bench/link.ld
+CONFIG_BOOT  :=
+SUITE_SUFFIX :=
+else ifeq ($(CONFIG),system)
+HEX_CONFIG   := $(HEX_SYSTEM)
+RVTEST_LD    := tests/riscv-tests-env/link-system.ld
+BENCH_LD     := sw/bench/link-system.ld
+CONFIG_BOOT  := tests/riscv-tests-env/boot.S
+SUITE_SUFFIX := -sdram
+else
+$(error CONFIG must be core or system)
+endif
 LIBS=sw/libmc/libmc.a
 
 SIM_IVERILOG := build/sim/result-iverilog
@@ -100,10 +121,12 @@ build/sim/result-rvfi: $(RTL_SRC)
 RVFI_LATENCY ?= 0
 
 .PHONY: rvfi-check rvfi-check-slow
-rvfi-check: build/sim/result-rvfi $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi
+rvfi-check: build/sim/result-rvfi $(TOOLS)
+	$(build-rvtests-both)
 	python3 tools/rvfi_check.py --all --mem-latency $(RVFI_LATENCY)
 
-rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi
+rvfi-check-slow: build/sim/result-rvfi $(TOOLS)
+	$(build-rvtests-both)
 	@rc=0; for d in 1 4 8; do \
 		printf 'rvfi mem-latency %-3s ' $$d; \
 		python3 tools/rvfi_check.py --all --mem-latency $$d > build/rvfi-$$d.log 2>&1 \
@@ -132,8 +155,9 @@ rvfi-check-slow: build/sim/result-rvfi $(TOOLS) riscv-tests riscv-tests-m riscv-
 # tests a pipeline change moved and by how much.
 CYCLE_DIR := tests/cycles
 CYCLE_LOG := build/cycles
-CYCLE_SUITES := rv32ui:run-riscv-tests-iverilog \
-                system:run-riscv-tests-system-iverilog
+# name:config:target, where "all" is every suite
+CYCLE_SUITES := rv32ui:core:run-riscv-tests-iverilog \
+                system:system:all
 
 .PHONY: cycle-baseline cycle-check
 
@@ -142,9 +166,10 @@ cycle-check:    MODE := --compare
 cycle-baseline cycle-check:
 	@mkdir -p $(CYCLE_DIR) $(CYCLE_LOG); rc=0; \
 	for s in $(CYCLE_SUITES); do \
-		name=$${s%%:*}; target=$${s#*:}; \
+		name=$${s%%:*}; rest=$${s#*:}; config=$${rest%%:*}; target=$${rest#*:}; \
+		if [ "$$target" = all ]; then target="$(RVTEST_RUNS)"; fi; \
 		echo "===== $$name ====="; \
-		$(MAKE) --no-print-directory $$target > $(CYCLE_LOG)/$$name.log 2>&1 \
+		$(MAKE) --no-print-directory CONFIG=$$config $$target > $(CYCLE_LOG)/$$name.log 2>&1 \
 			|| { echo "  suite FAILED -- see $(CYCLE_LOG)/$$name.log"; rc=1; continue; }; \
 		python3 tools/cycle_report.py $(MODE) $(CYCLE_DIR)/$$name.json \
 			$(CYCLE_LOG)/$$name.log || rc=1; \
@@ -208,12 +233,30 @@ RVTESTS_EXCLUDE := fence_i ma_data
 
 RVTESTS_ALL   := $(basename $(notdir $(wildcard $(RVTESTS_DIR)/*.S)))
 RVTESTS       := $(filter-out $(RVTESTS_EXCLUDE),$(RVTESTS_ALL))
-RVTESTS_ELF   := $(addprefix build/riscv-tests/,$(addsuffix .elf,$(RVTESTS)))
+RVTEST_OUT    := build/$(CONFIG)/riscv-tests
+RVTESTS_ELF   := $(addprefix $(RVTEST_OUT)/rv32ui/,$(addsuffix .elf,$(RVTESTS)))
 
-RVTEST_LD    := tests/riscv-tests-env/link.ld
 RVTEST_FLAGS := -march=$(MARCH) -mabi=$(MABI) -nostdlib -nostartfiles -fno-builtin \
                 -Itests/riscv-tests/env/p -Itests/riscv-tests/env \
-                -Itests/riscv-tests/isa/macros/scalar -T $(RVTEST_LD)
+                -Itests/riscv-tests/isa/macros/scalar -T $(RVTEST_LD) \
+                -Wl,--no-warn-rwx-segments
+
+# $(call rvtest-rule,suite,source-dir): build one suite for the current configuration
+define rvtest-rule
+$(RVTEST_OUT)/$(1)/%.elf: $(2)/%.S $(RVTEST_LD) $(CONFIG_BOOT)
+	mkdir -p $$(dir $$@)
+	$(CC) $(RVTEST_FLAGS) -o $$@ $$< $(CONFIG_BOOT)
+endef
+
+# Every riscv-tests ELF for one configuration, for the targets that cover both
+rvtest-elfs = $(addprefix build/$(1)/riscv-tests/rv32ui/,$(addsuffix .elf,$(RVTESTS))) \
+              $(addprefix build/$(1)/riscv-tests/rv32um/,$(addsuffix .elf,$(RVTESTS_M))) \
+              $(addprefix build/$(1)/riscv-tests/rv32mi/,$(addsuffix .elf,$(RVTESTS_MI)))
+
+define build-rvtests-both
+@$(MAKE) --no-print-directory CONFIG=core riscv-tests riscv-tests-m riscv-tests-mi
+@$(MAKE) --no-print-directory CONFIG=system riscv-tests riscv-tests-m riscv-tests-mi
+endef
 
 # $(call run-rvtests,suite,tests,elf-dir,hex-converter)
 define run-rvtests
@@ -240,14 +283,10 @@ endef
 
 .PHONY: riscv-tests run-riscv-tests-iverilog
 
-build/riscv-tests/%.elf: $(RVTESTS_DIR)/%.S $(RVTEST_LD)
-	mkdir -p $(dir $@)
-	$(CC) $(RVTEST_FLAGS) -o $@ $<
-
 riscv-tests: $(RVTESTS_ELF)
 
 run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
-	$(call run-rvtests,rv32ui,$(RVTESTS),riscv-tests,$(HEX_CORE))
+	$(call run-rvtests,rv32ui$(SUITE_SUFFIX),$(RVTESTS),$(CONFIG)/riscv-tests/rv32ui,$(HEX_CONFIG))
 
 # --------------------------------------------------------------------
 # Programs that run from SDRAM, linked against newlib.
@@ -317,18 +356,14 @@ run-sdram-hello: $(EXAMPLES_OUT)/hello.elf $(TOOLS) $(SIM_IVERILOG)
 # --------------------------------------------------------------------
 RVTESTS_M_DIR := tests/riscv-tests/isa/rv32um
 RVTESTS_M     := $(basename $(notdir $(wildcard $(RVTESTS_M_DIR)/*.S)))
-RVTESTS_M_ELF := $(addprefix build/riscv-tests-m/,$(addsuffix .elf,$(RVTESTS_M)))
+RVTESTS_M_ELF := $(addprefix $(RVTEST_OUT)/rv32um/,$(addsuffix .elf,$(RVTESTS_M)))
 
 .PHONY: riscv-tests-m run-riscv-tests-m-iverilog
-
-build/riscv-tests-m/%.elf: $(RVTESTS_M_DIR)/%.S $(RVTEST_LD)
-	mkdir -p $(dir $@)
-	$(CC) $(RVTEST_FLAGS) -o $@ $<
 
 riscv-tests-m: $(RVTESTS_M_ELF)
 
 run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
-	$(call run-rvtests,rv32um,$(RVTESTS_M),riscv-tests-m,$(HEX_CORE))
+	$(call run-rvtests,rv32um$(SUITE_SUFFIX),$(RVTESTS_M),$(CONFIG)/riscv-tests/rv32um,$(HEX_CONFIG))
 
 # --------------------------------------------------------------------
 # Official riscv-tests rv32mi suite (machine-mode CSRs and exceptions).
@@ -339,55 +374,27 @@ RVTESTS_MI_DIR := tests/riscv-tests/isa/rv32mi
 RVTESTS_MI_EXCLUDE := pmpaddr
 
 RVTESTS_MI     := $(filter-out $(RVTESTS_MI_EXCLUDE),$(basename $(notdir $(wildcard $(RVTESTS_MI_DIR)/*.S))))
-RVTESTS_MI_ELF := $(addprefix build/riscv-tests-mi/,$(addsuffix .elf,$(RVTESTS_MI)))
+RVTESTS_MI_ELF := $(addprefix $(RVTEST_OUT)/rv32mi/,$(addsuffix .elf,$(RVTESTS_MI)))
 
 .PHONY: riscv-tests-mi run-riscv-tests-mi-iverilog
-
-build/riscv-tests-mi/%.elf: $(RVTESTS_MI_DIR)/%.S $(RVTEST_LD)
-	mkdir -p $(dir $@)
-	$(CC) $(RVTEST_FLAGS) -o $@ $<
 
 riscv-tests-mi: $(RVTESTS_MI_ELF)
 
 run-riscv-tests-mi-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-mi
-	$(call run-rvtests,rv32mi,$(RVTESTS_MI),riscv-tests-mi,$(HEX_CORE))
+	$(call run-rvtests,rv32mi$(SUITE_SUFFIX),$(RVTESTS_MI),$(CONFIG)/riscv-tests/rv32mi,$(HEX_CONFIG))
 
-# --------------------------------------------------------------------
-# The same three suites run from SDRAM, so every fetch goes through the
-# instruction cache and every load and store through the data cache
-# --------------------------------------------------------------------
-RVTEST_SYSTEM_LD    := tests/riscv-tests-env/link-system.ld
-RVTEST_SYSTEM_BOOT  := tests/riscv-tests-env/boot.S
-RVTEST_SYSTEM_FLAGS := $(filter-out -T $(RVTEST_LD),$(RVTEST_FLAGS)) -T $(RVTEST_SYSTEM_LD) \
-                       -Wl,--no-warn-rwx-segments
-RVTEST_SYSTEM_OUT   := build/riscv-tests-system
+$(eval $(call rvtest-rule,rv32ui,$(RVTESTS_DIR)))
+$(eval $(call rvtest-rule,rv32um,$(RVTESTS_M_DIR)))
+$(eval $(call rvtest-rule,rv32mi,$(RVTESTS_MI_DIR)))
 
-RVTESTS_SYSTEM_ELF := $(addprefix $(RVTEST_SYSTEM_OUT)/rv32ui/,$(addsuffix .elf,$(RVTESTS))) \
-                      $(addprefix $(RVTEST_SYSTEM_OUT)/rv32um/,$(addsuffix .elf,$(RVTESTS_M))) \
-                      $(addprefix $(RVTEST_SYSTEM_OUT)/rv32mi/,$(addsuffix .elf,$(RVTESTS_MI)))
+# Every riscv-tests suite in the current configuration
+RVTEST_RUNS := run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-iverilog
 
-define rvtest-system-rule
-$(RVTEST_SYSTEM_OUT)/$(1)/%.elf: $(2)/%.S $(RVTEST_SYSTEM_LD) $(RVTEST_SYSTEM_BOOT)
-	mkdir -p $$(dir $$@)
-	$(CC) $(RVTEST_SYSTEM_FLAGS) -o $$@ $$< $(RVTEST_SYSTEM_BOOT)
-endef
-$(eval $(call rvtest-system-rule,rv32ui,$(RVTESTS_DIR)))
-$(eval $(call rvtest-system-rule,rv32um,$(RVTESTS_M_DIR)))
-$(eval $(call rvtest-system-rule,rv32mi,$(RVTESTS_MI_DIR)))
-
-.PHONY: riscv-tests-system run-riscv-tests-system-iverilog
-
-riscv-tests-system: $(RVTESTS_SYSTEM_ELF)
-
-run-riscv-tests-system-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-system
-	$(call run-rvtests,rv32ui-sdram,$(RVTESTS),riscv-tests-system/rv32ui,$(HEX_SYSTEM))
-	$(call run-rvtests,rv32um-sdram,$(RVTESTS_M),riscv-tests-system/rv32um,$(HEX_SYSTEM))
-	$(call run-rvtests,rv32mi-sdram,$(RVTESTS_MI),riscv-tests-system/rv32mi,$(HEX_SYSTEM))
-
-# Every riscv-tests suite, in the core and system configurations; the default target
+# Every suite in the core configuration, then the system configuration; the default target
 .PHONY: test
-test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-iverilog \
-      run-riscv-tests-system-iverilog
+test:
+	@$(MAKE) --no-print-directory CONFIG=core $(RVTEST_RUNS)
+	@$(MAKE) --no-print-directory CONFIG=system $(RVTEST_RUNS)
 
 # --------------------------------------------------------------------
 # Dhrystone. The benchmark sources are copied unmodified from
@@ -400,12 +407,13 @@ test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-ive
 # Dhrystone build.
 # --------------------------------------------------------------------
 DHRY_DIR  := sw/bench/dhrystone
-DHRY_OUT  := build/sw/bench/dhrystone
+DHRY_OUT  := build/$(CONFIG)/sw/bench/dhrystone
 DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Isw/libmc -I$(DHRY_DIR) \
               -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
               -Wno-implicit-int -Wno-return-type
 DHRY_OBJS := $(DHRY_OUT)/crt0.o $(DHRY_OUT)/dhrystone.o \
-             $(DHRY_OUT)/dhrystone_main.o $(DHRY_OUT)/port.o
+             $(DHRY_OUT)/dhrystone_main.o $(DHRY_OUT)/port.o \
+             $(if $(CONFIG_BOOT),$(DHRY_OUT)/boot.o)
 
 .PHONY: dhrystone
 
@@ -417,8 +425,12 @@ $(DHRY_OUT)/%.o: $(DHRY_DIR)/%.c $(DHRY_DIR)/dhrystone.h $(DHRY_DIR)/rv_env.h Ma
 	mkdir -p $(dir $@)
 	$(CC) $(DHRY_FLAGS) -c $< -o $@
 
-$(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) sw/bench/link.ld
-	$(LD) -m $(LDEMUL) --script sw/bench/link.ld -o $@ $(DHRY_OBJS) $(LDPOSTFLAGS)
+$(DHRY_OUT)/boot.o: tests/riscv-tests-env/boot.S Makefile
+	mkdir -p $(dir $@)
+	$(CC) $(SSFLAGS) -c $< -o $@
+
+$(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) $(BENCH_LD)
+	$(LD) -m $(LDEMUL) --script $(BENCH_LD) --no-warn-rwx-segments -o $@ $(DHRY_OBJS) $(LDPOSTFLAGS)
 
 dhrystone: $(DHRY_OUT)/dhrystone.elf
 
@@ -427,12 +439,12 @@ DHRY_TIMEOUT ?= 5000000
 
 .PHONY: run-dhrystone
 run-dhrystone: $(DHRY_OUT)/dhrystone.elf $(TOOLS) $(SIM_IVERILOG)
-	@$(HEX_CORE) $< $(HEX)/dhrystone
-	@cd $(HEX)/dhrystone && $(CURDIR)/$(SIM_IVERILOG) +timeout=$(DHRY_TIMEOUT) \
+	@$(HEX_CONFIG) $< $(HEX)/$(CONFIG)/dhrystone
+	@cd $(HEX)/$(CONFIG)/dhrystone && $(CURDIR)/$(SIM_IVERILOG) +timeout=$(DHRY_TIMEOUT) \
 		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) 2>/dev/null | \
 	awk -F= '/^CYCLES=/ { c = $$2 } /^RUNS=/ { r = $$2 } \
 		END { if (!r) { print "dhrystone did not finish"; exit 1 } \
-		      printf "%d runs, %d cycles per run, %.3f DMIPS/MHz\n", r, c / r, 1e6 / (c / r) / 1757 }'
+		      printf "$(CONFIG): %d runs, %d cycles per run, %.3f DMIPS/MHz\n", r, c / r, 1e6 / (c / r) / 1757 }'
 
 # --------------------------------------------------------------------
 # The divider's arithmetic on its own: every spec corner plus random pairs
@@ -457,13 +469,14 @@ build/cov/Vtop: $(RTL_CORE) sim/verilator_top.cpp
 		--Mdir build/cov -Wno-fatal $(RTL_INC) rtl/top.sv sim/verilator_top.cpp --exe \
 		-o Vtop
 
-coverage: build/cov/Vtop $(TOOLS) riscv-tests riscv-tests-m riscv-tests-mi riscv-tests-system
+coverage: build/cov/Vtop $(TOOLS)
+	$(build-rvtests-both)
 	@rm -rf build/cov/dat; mkdir -p build/cov/dat
 	@set -e; n=0; \
-	for e in $(RVTESTS_ELF) $(RVTESTS_M_ELF) $(RVTESTS_MI_ELF) $(RVTESTS_SYSTEM_ELF); do \
+	for e in $(call rvtest-elfs,core) $(call rvtest-elfs,system); do \
 		t=`echo $$e | sed 's#^build/##; s#\.elf$$##'`; \
 		d=$(HEX)/$$t; c=$(CURDIR)/build/cov/dat/`echo $$t | tr / -`; \
-		case $$e in $(RVTEST_SYSTEM_OUT)/*) $(HEX_SYSTEM) $$e $$d ;; \
+		case $$e in build/system/*) $(HEX_SYSTEM) $$e $$d ;; \
 			*) $(HEX_CORE) $$e $$d ;; esac >/dev/null; \
 		(cd $$d && RV32_COVERAGE_FILE=$$c.dat \
 			$(CURDIR)/build/cov/Vtop >/dev/null 2>&1); n=$$((n+1)); \
