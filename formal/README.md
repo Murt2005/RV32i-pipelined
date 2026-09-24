@@ -53,8 +53,7 @@ needs depth 56 before an iterative divide can retire.
 **Status.** The checks haven't been rerun since the machine-mode CSR and trap
 changes. `liveness` has an open counterexample: with the external `stall`
 input asserted for one cycle while a `jal` is in fetch, the instruction stays
-latched and never retires. The pico2-ice drives `stall` for UART backpressure,
-so this matters on hardware.
+latched and never retires.
 
 ## How it is wired
 

@@ -1,16 +1,15 @@
 # RV32IM Pipelined Processor
 
-A five-stage pipelined RISC-V core in SystemVerilog, tested with the official
-riscv-tests suites, checked with riscv-formal, and running on a pico2-ice
-(iCE40UP5K) FPGA board.
+A five-stage pipelined RISC-V core in SystemVerilog, tested in simulation with
+the official riscv-tests suites and checked with riscv-formal.
 
 - **ISA:** RV32IM with Zicsr, machine mode only, precise traps
 - **Pipeline:** fetch, decode, execute, memory, writeback, with full bypassing,
   a load-use stall and an 8-entry branch target buffer
 - **Memory:** a ready/valid request/response interface, so the core runs
   against memories that answer late or refuse requests
-- **Hardware:** the RV32I build runs on the pico2-ice, loaded over USB (see
-  [`fpga/README.md`](fpga/README.md))
+- **Bus:** on-chip instruction and data memories, MMIO, and an SDRAM region
+  behind 16 KiB instruction and data caches
 
 ## Quick start
 
@@ -21,8 +20,8 @@ make            # build and run every riscv-tests suite under Icarus Verilog
 ```
 
 You need a RISC-V GCC toolchain (`riscv64-unknown-elf-*`), Icarus Verilog, and
-Python 3. Verilator is only needed for `make coverage`; the FPGA and formal
-flows have their own requirements, listed in their READMEs.
+Python 3. Verilator is only needed for `make coverage`, and the formal flow has
+its own requirements, listed in [`formal/README.md`](formal/README.md).
 
 ## Architecture
 
@@ -59,8 +58,7 @@ Accessing any other CSR, or writing a read-only one, is an illegal instruction.
 
 ### Memory map
 
-This is the simulation top, `rtl/top.sv`. The pico2-ice top has the on-chip
-memories and MMIO but no SDRAM.
+This is the simulation top, `rtl/top.sv`.
 
 | Address | What |
 |---|---|
@@ -73,13 +71,13 @@ memories and MMIO but no SDRAM.
 
 | Command | What it checks |
 |---|---|
-| `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment |
+| `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, run twice: from on-chip memory, and from SDRAM through the caches |
 | `make rvfi-check` | Replays every retired instruction of every test through a reference model (`tools/rv32_model.py`) |
 | `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
-| `make cycle-check` | rv32ui cycle counts against the checked-in baseline, to catch timing changes |
+| `make cycle-check` | Cycle counts against the checked-in baselines, to catch timing changes |
 | `make divider-tb` | The divider on its own: every spec corner case plus random operands |
-| `make coverage` | Verilator line and toggle coverage over every suite |
-| `python3 tools/rv32_diff.py --sim` | Random RV32IM programs against the reference model |
+| `make coverage` | Verilator line and toggle coverage over every suite (83%) |
+| `python3 tools/rv32_diff.py` | Random RV32IM programs against the reference model |
 | `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
 Excluded riscv-tests: `fence_i` (instruction and data memories are separate, so
@@ -87,25 +85,25 @@ code can't be modified in place), `ma_data` (it expects misaligned accesses to
 be emulated; this core traps instead, which the spec also allows) and
 `pmpaddr` (no physical memory protection).
 
-riscv-tests only need a linker script from this repo,
-`tests/riscv-tests-env/link.ld`, which maps them onto the memory map above.
+riscv-tests only need linker scripts from this repo: `tests/riscv-tests-env/link.ld`
+maps them onto on-chip memory, and `link-sdram.ld` with the `boot.S` stub runs
+them from SDRAM.
 
 ## Known issues
 
 - **Liveness under external stall.** riscv-formal found a case where a
   one-cycle `stall` with a `jal` in fetch leaves the instruction latched and
-  never retiring. The pico2-ice uses `stall` for UART backpressure.
-- **The board build is 99% full.** 5251/5280 logic cells on the iCE40UP5K, and
-  timing at 12 MHz passes or fails depending on placement. See
-  [`fpga/README.md`](fpga/README.md).
+  never retiring. The simulation's random stall injection drives the same input.
+- **`fence.i` doesn't invalidate the instruction cache**, so self-modifying code
+  needs the MMIO invalidate register, and the riscv-tests `fence_i` test is
+  excluded.
 
 ## Software
 
 | Command | What |
 |---|---|
-| `make dhrystone` | Dhrystone for the board, built rv32i |
-| `make ipc` | A mixed workload that reads the performance counters, for the board |
-| `make run-sdram-hello` | A newlib C program running from SDRAM, in simulation |
+| `make run-dhrystone` | Dhrystone in simulation (0.842 DMIPS/MHz) |
+| `make run-sdram-hello` | A newlib C program running from SDRAM |
 
 ## Layout
 
@@ -118,7 +116,5 @@ riscv-tests only need a linker script from this repo,
 | `sim/` | Icarus and Verilator harnesses, divider testbench |
 | `tests/` | riscv-tests (submodule), its linker script, cycle baseline |
 | `formal/` | riscv-formal harness |
-| `fpga/ice40/` | pico2-ice board top, UART loader, board-level simulation |
-| `firmware/` | RP2350 firmware that bridges USB to the FPGA |
-| `sw/` | Dhrystone, the IPC bench, a small C library, and the newlib runtime for SDRAM programs |
-| `tools/` | Host tool for the board, reference model, RVFI checker, random tester |
+| `sw/` | Dhrystone and its small C library, and the newlib runtime for SDRAM programs |
+| `tools/` | Reference model, RVFI checker, random tester, ELF-to-hex converters |
