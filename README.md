@@ -8,7 +8,7 @@ the official riscv-tests suites and checked with riscv-formal.
   a load-use stall and an 8-entry branch target buffer
 - **Memory:** a ready/valid request/response interface, so the core runs
   against memories that answer late or refuse requests
-- **Bus:** on-chip instruction and data memories, MMIO, and an SDRAM region
+- **Bus:** instruction and data memories (IMEM, DMEM), MMIO, and an SDRAM region
   behind 16 KiB instruction and data caches
 
 ## Quick start
@@ -71,7 +71,7 @@ This is the simulation top, `rtl/top.sv`.
 
 | Command | What it checks |
 |---|---|
-| `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, run twice: from on-chip memory, and from SDRAM through the caches |
+| `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, run twice: from IMEM/DMEM, and from SDRAM through the caches |
 | `make rvfi-check` | Replays every retired instruction of every test through a reference model (`tools/rv32_model.py`) |
 | `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
 | `make cycle-check` | Cycle counts against the checked-in baselines, to catch timing changes |
@@ -86,7 +86,7 @@ be emulated; this core traps instead, which the spec also allows) and
 `pmpaddr` (no physical memory protection).
 
 riscv-tests only need linker scripts from this repo: `tests/riscv-tests-env/link.ld`
-maps them onto on-chip memory, and `link-sdram.ld` with the `boot.S` stub runs
+maps them onto IMEM/DMEM, and `link-sdram.ld` with the `boot.S` stub runs
 them from SDRAM.
 
 ## Known issues
@@ -111,7 +111,7 @@ them from SDRAM.
 |---|---|
 | `rtl/core/` | The core: pipeline (`cpu.sv`), divider, ISA decode |
 | `rtl/bus/` | Address decoder, MMIO, instruction and data caches, SDRAM arbiter |
-| `rtl/mem/` | Memory interface and on-chip memories, plus a slow-memory wrapper for testing |
+| `rtl/mem/` | Memory interface and the IMEM/DMEM model, plus a slow-memory wrapper for testing |
 | `rtl/top.sv` | Simulation top |
 | `sim/` | Icarus and Verilator harnesses, divider testbench |
 | `tests/` | riscv-tests (submodule), its linker script, cycle baseline |

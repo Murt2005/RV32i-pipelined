@@ -252,9 +252,9 @@ run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
 # --------------------------------------------------------------------
 # Programs that run from SDRAM, linked against newlib.
 #
-# Anything with a C library in it is far too large for the 64 KiB on-chip
-# instruction memory, so these link .text, .rodata, .data and .bss into SDRAM and
-# leave only a reset stub at 0x00010000.
+# Anything with a C library in it is far too large for the 64 KiB IMEM, so these
+# link .text, .rodata, .data and .bss into SDRAM and leave only a reset stub at
+# 0x00010000.
 #
 # newlib rather than libmc: libmc has no malloc, no file I/O and no memcpy, and
 # its printf drops the `l` in %ld. libmc is untouched and Dhrystone still uses it.
@@ -384,7 +384,7 @@ run-riscv-tests-sdram-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-sdram
 	$(call run-rvtests,rv32um-sdram,$(RVTESTS_M),riscv-tests-sdram/rv32um,$(HEX_SYSTEM))
 	$(call run-rvtests,rv32mi-sdram,$(RVTESTS_MI),riscv-tests-sdram/rv32mi,$(HEX_SYSTEM))
 
-# Every riscv-tests suite, on-chip and from SDRAM; the default target
+# Every riscv-tests suite, in the core configuration and from SDRAM; the default target
 .PHONY: test
 test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-iverilog \
       run-riscv-tests-sdram-iverilog

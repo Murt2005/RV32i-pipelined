@@ -1,6 +1,6 @@
 # Reset stub for a program linked into SDRAM.
 #
-# The core resets to 0x00010000 -- on-chip instruction memory -- and this is the
+# The core resets to 0x00010000 -- IMEM -- and this is the
 # only thing that lives there. It sets up a stack, clears .bss, and jumps to the
 # real entry point in SDRAM.
 #
@@ -14,9 +14,9 @@
     .section .boot, "ax"
     .globl _start
 _start:
-    # Stack below the MMIO block at 0x0002FFC0, growing down through the on-chip
-    # data memory. Kept there rather than in SDRAM so a runaway stack hits the
-    # bottom of a small memory instead of quietly eating the heap.
+    # Stack below the MMIO block at 0x0002FFC0, growing down through DMEM. Kept
+    # there rather than in SDRAM so a runaway stack hits the bottom of a small
+    # memory instead of quietly eating the heap.
     li      sp, 0x0002FF80
 
     # Clear .bss.

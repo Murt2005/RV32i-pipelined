@@ -1,13 +1,11 @@
 /*
  * Link a program to run out of SDRAM.
  *
- * The core resets to 0x00010000, which is on-chip instruction memory and only
- * 64 KiB -- smaller than anything with a C library in it. So the reset address
- * holds a stub whose whole job is to jump to SDRAM, and everything else lives
- * there.
+ * The core resets to 0x00010000, which is IMEM and only 64 KiB -- smaller than
+ * anything with a C library in it. So the reset address holds a stub whose whole
+ * job is to jump to SDRAM, and everything else lives there.
  *
- * .data and .bss are in SDRAM too, since a C program's heap outgrows the
- * on-chip data memory.
+ * .data and .bss are in SDRAM too, since a C program's heap outgrows DMEM.
  *
  * The MMIO block is still at 0x0002FFC0 and the stack still starts below it,
  * because print and halt go through those registers and the existing runtime

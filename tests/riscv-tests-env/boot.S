@@ -1,5 +1,5 @@
-// Reset stub for riscv-tests run from SDRAM: the core resets into on-chip
-// instruction memory, so jump from there to the test's _start
+// Reset stub for riscv-tests run from SDRAM: the core resets into IMEM, so jump
+// from there to the test's _start
 
     .section .boot, "ax"
     .globl _boot
