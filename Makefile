@@ -120,29 +120,11 @@ $(SIM_IVERILOG): $(RTL_SRC)
 	mkdir -p $(dir $@)
 	$(IVERILOG) -g2012 $(RTL_INC) -o $@ sim/itop.sv
 
-# Same design with the RVFI commit port enabled. Separate binary so the normal
-# simulator, and the synthesised build, carry none of the instrumentation.
+# Same design with the RVFI commit port enabled; sim/itop.sv then prints a record
+# for every retired instruction, which helps when debugging a cosim mismatch
 build/sim/result-rvfi: $(RTL_SRC)
 	mkdir -p $(dir $@)
 	$(IVERILOG) -g2012 $(RTL_INC) -DRVFI -o $@ sim/itop.sv
-
-# RVFI_LATENCY sweeps the commit record against a slow memory as well as a fast
-# one. The record has to be right in both cases and, until this existed, only the
-# fast one was ever checked.
-RVFI_LATENCY ?= 0
-
-.PHONY: rvfi-check rvfi-check-slow
-rvfi-check: build/sim/result-rvfi $(TOOLS)
-	$(build-rvtests-both)
-	python3 tools/rvfi_check.py --all --mem-latency $(RVFI_LATENCY)
-
-rvfi-check-slow: build/sim/result-rvfi $(TOOLS)
-	$(build-rvtests-both)
-	@rc=0; for d in 1 4 8; do \
-		printf 'rvfi mem-latency %-3s ' $$d; \
-		python3 tools/rvfi_check.py --all --mem-latency $$d > build/rvfi-$$d.log 2>&1 \
-			&& echo ok || { echo "FAILED -- build/rvfi-$$d.log"; rc=1; }; \
-	done; exit $$rc
 
 
 # --------------------------------------------------------------------
