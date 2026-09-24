@@ -4,3 +4,6 @@
 [submodule "formal/riscv-formal"]
 	path = formal/riscv-formal
 	url = https://github.com/YosysHQ/riscv-formal
+[submodule "sim/riscv-isa-sim"]
+	path = sim/riscv-isa-sim
+	url = https://github.com/riscv-software-src/riscv-isa-sim

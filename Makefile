@@ -447,6 +447,23 @@ run-dhrystone: $(DHRY_OUT)/dhrystone.elf $(TOOLS) $(SIM_IVERILOG)
 		      printf "$(CONFIG): %d runs, %d cycles per run, %.3f DMIPS/MHz\n", r, c / r, 1e6 / (c / r) / 1757 }'
 
 # --------------------------------------------------------------------
+# Spike, the reference simulator for co-simulation, built from the pinned
+# sim/riscv-isa-sim submodule into build/spike
+# --------------------------------------------------------------------
+SPIKE_SRC    := sim/riscv-isa-sim
+SPIKE_PREFIX := $(CURDIR)/build/spike
+SPIKE_JOBS   := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+
+.PHONY: spike
+spike: $(SPIKE_PREFIX)/bin/spike
+
+$(SPIKE_PREFIX)/bin/spike:
+	mkdir -p build/spike-build
+	cd build/spike-build && $(CURDIR)/$(SPIKE_SRC)/configure --prefix=$(SPIKE_PREFIX)
+	MAKEFLAGS= $(MAKE) -C build/spike-build -j$(SPIKE_JOBS)
+	MAKEFLAGS= $(MAKE) -C build/spike-build install
+
+# --------------------------------------------------------------------
 # The divider's arithmetic on its own: every spec corner plus random pairs
 # --------------------------------------------------------------------
 .PHONY: divider-tb
