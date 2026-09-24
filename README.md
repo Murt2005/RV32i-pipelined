@@ -34,8 +34,9 @@ Programs are built and run in one of two configurations, chosen with `CONFIG`:
 | `system` | A boot stub in IMEM, the program in SDRAM | Testing the bus and caches |
 
 ```bash
-make run-riscv-tests-iverilog CONFIG=system   # rv32ui from SDRAM
-make run-dhrystone CONFIG=core                # Dhrystone from IMEM/DMEM
+make rv32ui CONFIG=system      # rv32ui from SDRAM
+make dhrystone CONFIG=core     # Dhrystone from IMEM/DMEM
+make help                      # every target and option
 ```
 
 Each configuration builds into its own folder, `build/core/` or `build/system/`.
@@ -91,19 +92,19 @@ This is the simulation top, `sim/top.sv`.
 | Command | What it checks |
 |---|---|
 | `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, in the core configuration and then the system configuration |
-| `make run-riscv-tests-iverilog`, `-m-iverilog`, `-mi-iverilog` | One suite, in `CONFIG` |
+| `make rv32ui`, `rv32um`, `rv32mi` | One suite, in `CONFIG` |
 | `make cosim-check` | Every riscv-test in both configurations in lockstep with [Spike](https://github.com/riscv-software-src/riscv-isa-sim), comparing every retired instruction |
 | `make cosim-random ITERS=100 SEED=1` | Random RV32IM programs from `tools/rvgen.py`, in lockstep with Spike, in `CONFIG` |
 | `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
 | `make cycle-check` | Cycle counts against the checked-in baselines for both configurations, to catch timing changes |
-| `make divider-tb` | The divider on its own: every spec corner case plus random operands |
-| `make coverage` | Verilator line and toggle coverage over every suite in both configurations (83%) |
+| `make divider` | The divider on its own: every spec corner case plus random operands |
+| `make coverage` | Verilator line and toggle coverage over every suite in both configurations (84%) |
+| `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
 `SIM=cosim` runs any suite target through the co-simulator instead of Icarus,
-for example `make run-riscv-tests-iverilog SIM=cosim CONFIG=system`. The
+for example `make rv32ui SIM=cosim CONFIG=system`. The
 co-simulator (`cosim/cosim.cpp`) steps Spike once for every instruction the core
 retires and stops at the first difference, printing both sides.
-| `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
 Excluded riscv-tests: `fence_i` (instruction and data memories are separate, so
 code can't be modified in place), `ma_data` (it expects misaligned accesses to
@@ -132,7 +133,7 @@ them from SDRAM.
 
 | Command | What |
 |---|---|
-| `make run-dhrystone` | Dhrystone in `CONFIG`: 0.842 DMIPS/MHz in core, 0.768 in system |
+| `make dhrystone` | Dhrystone in `CONFIG`: 0.842 DMIPS/MHz in core, 0.768 in system |
 
 ## Layout
 

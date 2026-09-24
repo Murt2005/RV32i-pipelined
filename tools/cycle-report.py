@@ -13,11 +13,8 @@ Cycles come from the simulator's own `$finish` timestamp rather than from the
 core's mcycle CSR, because that works for every test including the ones that
 never read a counter, and it costs nothing to collect.
 
-    # record a baseline
-    make run-riscv-tests-iverilog | python3 tools/cycle-report.py --save build/cycles-base.json
-
-    # after a change, compare
-    make run-riscv-tests-iverilog | python3 tools/cycle-report.py --compare build/cycles-base.json
+    make cycle-baseline     # record tests/cycles/<config>.json
+    make cycle-check        # compare against them
 """
 
 import argparse
@@ -33,8 +30,8 @@ PS_PER_CYCLE = 10_000
 # precedes the $finish:
 #     === add ===
 #     sim/itop.sv:78: $finish called at 15640000 (1ps)
-# The riscv-tests runners swallow the simulator output and print one line per
-# test, so the runner re-emits the timestamp itself:
+# tools/run-tests.sh swallows the simulator output and prints one line per
+# test, so it re-emits the timestamp itself:
 #     PASS rv32ui-add  finish=15640000
 NAME_RE = re.compile(r"^===\s*(\S+)\s*===")
 FINISH_RE = re.compile(r"\$finish called at (\d+)")
