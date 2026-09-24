@@ -1,8 +1,5 @@
-/* Link script for C benchmarks.
- *
- * sw/common/link.ld collects only *(.text), which is fine for hand-written
- * assembly but silently drops the .text.startup / .text.unlikely
- * sections GCC emits at -O2 -- the code links, and then jumps into nothing.
+/* Link script for C benchmarks. It collects .text.* too, since GCC puts code in
+ * .text.startup and .text.unlikely at -O2
  */
 SECTIONS
 {

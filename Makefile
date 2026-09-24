@@ -23,7 +23,6 @@ LD=$(RISCV_PREFIX)-ld
 CSTD=-std=gnu17
 
 SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
-LDFLAGS=-m $(LDEMUL) --script sw/common/link.ld
 LDPOSTFLAGS= -Lsw/libmc -lmc -L$(RISCV_LIB) -lgcc
 TOOLS=build/tools/dumphex
 LIBS=sw/libmc/libmc.a
@@ -55,15 +54,6 @@ MEM_LATENCY ?= 0
 SIM_TIMEOUT ?= 120000
 
 SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_TIMEOUT)
-
-# Assembly programs (the IPC bench) built against sw/common
-build/%.o: %.s sw/common/test_macros.s sw/common/test_runtime.s
-	mkdir -p $(dir $@)
-	$(AS) $(SSFLAGS) -c $< -o $@
-
-build/%.elf: build/%.o sw/common/link.ld
-	mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) -o $@ $<
 
 
 # Rebuilt when its sources or its ISA change, so a stale archive is never linked
@@ -381,11 +371,11 @@ DHRY_OBJS := $(DHRY_OUT)/crt0.o $(DHRY_OUT)/dhrystone.o \
 
 .PHONY: dhrystone
 
-$(DHRY_OUT)/crt0.o: $(DHRY_DIR)/crt0.s
+$(DHRY_OUT)/crt0.o: $(DHRY_DIR)/crt0.s Makefile
 	mkdir -p $(dir $@)
 	$(AS) $(SSFLAGS) -c $< -o $@
 
-$(DHRY_OUT)/%.o: $(DHRY_DIR)/%.c $(DHRY_DIR)/dhrystone.h $(DHRY_DIR)/rv_env.h
+$(DHRY_OUT)/%.o: $(DHRY_DIR)/%.c $(DHRY_DIR)/dhrystone.h $(DHRY_DIR)/rv_env.h Makefile
 	mkdir -p $(dir $@)
 	$(CC) $(DHRY_FLAGS) -c $< -o $@
 
@@ -394,9 +384,17 @@ $(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) sw/bench/link.ld
 
 dhrystone: $(DHRY_OUT)/dhrystone.elf
 
-# IPC bench
-.PHONY: ipc
-ipc: build/sw/bench/ipc.elf
+# Dhrystone in simulation; DMIPS/MHz is 1e6 / (cycles per run) / 1757
+DHRY_TIMEOUT ?= 5000000
+
+.PHONY: run-dhrystone
+run-dhrystone: $(DHRY_OUT)/dhrystone.elf $(TOOLS) $(SIM_IVERILOG)
+	@/bin/bash tools/elftohex.sh $< $(HEX)/dhrystone >/dev/null 2>&1
+	@cd $(HEX)/dhrystone && $(CURDIR)/$(SIM_IVERILOG) +timeout=$(DHRY_TIMEOUT) \
+		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) 2>/dev/null | \
+	awk -F= '/^CYCLES=/ { c = $$2 } /^RUNS=/ { r = $$2 } \
+		END { if (!r) { print "dhrystone did not finish"; exit 1 } \
+		      printf "%d runs, %d cycles per run, %.3f DMIPS/MHz\n", r, c / r, 1e6 / (c / r) / 1757 }'
 
 # --------------------------------------------------------------------
 # The divider's arithmetic on its own: every spec corner plus random pairs
