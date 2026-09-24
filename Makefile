@@ -22,14 +22,9 @@ LD=$(RISCV_PREFIX)-ld
 # regression suite is hand-written assembly.
 CSTD=-std=gnu17
 
-# The pico2-ice bitstream has no M extension, so software for the board is built
-# rv32i, with multiply and divide coming from the rv32i libgcc
-BOARD_MARCH := rv32i_zicsr
-BOARD_LIBGCC = $(shell $(CC) -march=$(BOARD_MARCH) -mabi=$(MABI) -print-libgcc-file-name)
-
-SSFLAGS=-march=$(BOARD_MARCH) -mabi=$(MABI)
+SSFLAGS=-march=$(MARCH) -mabi=$(MABI)
 LDFLAGS=-m $(LDEMUL) --script sw/common/link.ld
-LDPOSTFLAGS= -Lsw/libmc -lmc $(BOARD_LIBGCC)
+LDPOSTFLAGS= -Lsw/libmc -lmc -L$(RISCV_LIB) -lgcc
 TOOLS=build/tools/dumphex
 LIBS=sw/libmc/libmc.a
 
@@ -77,7 +72,7 @@ LIBMC_SRC := $(wildcard sw/libmc/*.c) $(wildcard sw/libmc/*.s) $(wildcard sw/lib
 
 sw/libmc/libmc.a: $(LIBMC_SRC)
 	$(MAKE) -C sw/libmc clean
-	$(MAKE) -C sw/libmc MARCH=$(BOARD_MARCH)
+	$(MAKE) -C sw/libmc
 
 build/tools/dumphex: tools/dumphex.c
 	mkdir -p $(dir $@)
@@ -378,7 +373,7 @@ test: run-riscv-tests-iverilog run-riscv-tests-m-iverilog run-riscv-tests-mi-ive
 # --------------------------------------------------------------------
 DHRY_DIR  := sw/bench/dhrystone
 DHRY_OUT  := build/sw/bench/dhrystone
-DHRY_FLAGS := -march=$(BOARD_MARCH) -mabi=$(MABI) $(CSTD) -O2 -Isw/libmc -I$(DHRY_DIR) \
+DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CSTD) -O2 -Isw/libmc -I$(DHRY_DIR) \
               -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch \
               -Wno-implicit-int -Wno-return-type
 DHRY_OBJS := $(DHRY_OUT)/crt0.o $(DHRY_OUT)/dhrystone.o \
@@ -399,7 +394,7 @@ $(DHRY_OUT)/dhrystone.elf: $(DHRY_OBJS) $(LIBS) sw/bench/link.ld
 
 dhrystone: $(DHRY_OUT)/dhrystone.elf
 
-# IPC bench for the board, read back by rv32_host.py --bench
+# IPC bench
 .PHONY: ipc
 ipc: build/sw/bench/ipc.elf
 

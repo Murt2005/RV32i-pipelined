@@ -4,17 +4,9 @@ Differential test: random RV32IM programs against the reference model.
 
 For each iteration it generates a random program -- ALU ops, multiply and
 divide, loads and stores, forward branches, JAL, register-indirect JALR and
-counted loops with backward branches -- and runs it two ways:
-
-  default   on the FPGA, comparing the full architectural state afterwards: all
-            30 general registers plus the scratch memory the program was allowed
-            to touch, read back over the loader's 'R' command.
-
-  --sim     under iverilog, comparing the RVFI commit record instruction by
-            instruction. Slower per program, but it localises a disagreement to
-            the instruction that caused it, and it needs no hardware -- which is
-            what makes random testing usable while the pipeline itself is being
-            changed.
+counted loops with backward branches -- and runs it under iverilog, comparing
+the RVFI commit record against the model instruction by instruction, so a
+disagreement is pinned to the instruction that caused it.
 
 Termination is structural, not hoped for: forward-only branches make progress
 monotonic, the loop counter lives in a reserved register and is masked to 0..7
@@ -28,9 +20,9 @@ patterns a human chose. The bugs left in a pipelined core live in
 cycle next to a particular branch. Random sequences hit those combinations
 without anyone having to imagine them.
 
-    python3 tools/rv32_diff.py                       # 50 programs, on hardware
-    python3 tools/rv32_diff.py --sim --iters 100     # no hardware needed
-    python3 tools/rv32_diff.py --sim --mem-latency 8 --stall-rate 128
+    python3 tools/rv32_diff.py                       # 50 programs
+    python3 tools/rv32_diff.py --iters 100
+    python3 tools/rv32_diff.py --mem-latency 8 --stall-rate 128
     python3 tools/rv32_diff.py --iters 500 --seed 7
     python3 tools/rv32_diff.py --length 400          # longer programs
 """
@@ -44,8 +36,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rv32_model import Rv32Model                                # noqa: E402
 from rvfi_check import run_sim_images, compare                   # noqa: E402
-from rv32_host import (open_board, Rv32Error, TEXT_BASE,        # noqa: E402
-                       DATA_BASE, check_build_id)
 
 # x31 is reserved as the scratch-memory base pointer and is never written by
 # generated code, so every load and store is guaranteed to land in bounds.
@@ -268,60 +258,8 @@ def to_bytes(words):
     return bytes(out)
 
 
-def run_one(board, rng, body_len, verbose=False):
-    words, _ = gen_program(rng, body_len)
-    text = to_bytes(words)
-
-    # reference
-    model = Rv32Model(text, b"")
-    if not model.run():
-        return "model did not halt", None
-
-    # hardware
-    board.halt()
-    board.zero_mem()
-    board.write_mem(TEXT_BASE, text)
-    out, halted = board.go(run_timeout=10.0)
-    if not halted:
-        return "hardware did not halt", text
-    if out:
-        return f"hardware produced unexpected output {out!r}", text
-
-    hw_dump = board.read_mem(DUMP_BASE, len(DUMP_REGS) * 4)
-    hw_scratch = board.read_mem(SCRATCH_BASE, SCRATCH_SIZE)
-    md_dump = model.read(DUMP_BASE, len(DUMP_REGS) * 4)
-    md_scratch = model.read(SCRATCH_BASE, SCRATCH_SIZE)
-
-    if hw_dump != md_dump:
-        for i, r in enumerate(DUMP_REGS):
-            h = int.from_bytes(hw_dump[i * 4:i * 4 + 4], "little")
-            m = int.from_bytes(md_dump[i * 4:i * 4 + 4], "little")
-            if h != m:
-                return f"x{r}: hardware 0x{h:08x}, model 0x{m:08x}", text
-    if hw_scratch != md_scratch:
-        for i in range(0, SCRATCH_SIZE, 4):
-            h = hw_scratch[i:i + 4]
-            m = md_scratch[i:i + 4]
-            if h != m:
-                return (f"mem[0x{SCRATCH_BASE + i:08x}]: hardware {h.hex()}, "
-                        f"model {m.hex()}"), text
-    return None, text
-
-
 def run_one_sim(repo_root, rng, body_len, sim_args=()):
-    """Same comparison against the simulator instead of a board.
-
-    The board version compares final architectural state: thirty registers and a
-    block of scratch memory, read back over the loader. In simulation the RVFI
-    commit record is available, so this compares *every retired instruction* --
-    PC, encoding, both source operands, the result and the next PC -- which
-    localises a disagreement to the instruction that caused it rather than to
-    whatever the registers looked like at the end.
-
-    It exists mostly because the board version cannot run at all without
-    hardware attached, which left random-program testing unavailable exactly
-    while the pipeline was being rebuilt underneath it.
-    """
+    """Run one random program and compare every retired instruction to the model"""
     words, _ = gen_program(rng, body_len)
     text = to_bytes(words)
 
@@ -342,19 +280,15 @@ def run_one_sim(repo_root, rng, body_len, sim_args=()):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sim", action="store_true",
-                    help="run against the iverilog simulator and compare the "
-                         "RVFI record, instead of against attached hardware")
     ap.add_argument("--mem-latency", type=int, default=0,
-                    help="--sim only: extra memory latency, 0..N cycles per access")
-    ap.add_argument("--port")
+                    help="extra memory latency, 0..N cycles per access")
     ap.add_argument("--iters", type=int, default=50)
     ap.add_argument("--length", type=int, default=120,
                     help="instructions in the random body")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--stall-rate", type=int, default=0,
                     help="drive the core's stall input from an LFSR this often "
-                         "out of 256 (0 = only transmit-queue backpressure)")
+                         "out of 256 (0 disables)")
     ap.add_argument("--save-failure", default="build/diff-failure.bin")
     args = ap.parse_args()
 
@@ -362,67 +296,24 @@ def main():
     print(f"seed {seed}, {args.iters} programs of {args.length} instructions, "
           f"stall rate {args.stall_rate}/256")
 
-    if args.sim:
-        repo_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-        sim_args = [f"+stallrate={args.stall_rate}",
-                    f"+memlatency={args.mem_latency}"]
-        failures = 0
-        for i in range(args.iters):
-            rng = random.Random(seed + i)
-            why, text = run_one_sim(repo_root, rng, args.length, sim_args)
-            if why:
-                failures += 1
-                print(f"FAIL  iter {i} (seed {seed + i}): {why}")
-                if text:
-                    os.makedirs(os.path.dirname(args.save_failure), exist_ok=True)
-                    with open(args.save_failure, "wb") as f:
-                        f.write(text)
-                    print(f"      program written to {args.save_failure}")
-                break
-            if (i + 1) % 10 == 0:
-                print(f"  {i + 1}/{args.iters} ok")
-        print(f"\n{args.iters - failures} matched, {failures} mismatched")
-        return 1 if failures else 0
-
-    try:
-        board = open_board(args.port)
-    except Rv32Error as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-
-    check_build_id(board, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-
-    try:
-        board.set_stall_rate(args.stall_rate)
-    except Rv32Error as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        board.close()
-        return 2
-
+    repo_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    sim_args = [f"+stallrate={args.stall_rate}",
+                f"+memlatency={args.mem_latency}"]
     failures = 0
-    try:
-        for i in range(args.iters):
-            # Per-iteration seed, so any single failure is reproducible on its
-            # own without replaying everything before it.
-            rng = random.Random(seed + i)
-            why, text = run_one(board, rng, args.length)
-            if why:
-                failures += 1
-                print(f"FAIL  iter {i} (seed {seed + i}): {why}")
-                if text:
-                    os.makedirs(os.path.dirname(args.save_failure), exist_ok=True)
-                    with open(args.save_failure, "wb") as f:
-                        f.write(text)
-                    print(f"      program written to {args.save_failure}")
-                break
-            if (i + 1) % 10 == 0:
-                print(f"  {i + 1}/{args.iters} ok")
-    except Rv32Error as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    finally:
-        board.close()
-
+    for i in range(args.iters):
+        rng = random.Random(seed + i)
+        why, text = run_one_sim(repo_root, rng, args.length, sim_args)
+        if why:
+            failures += 1
+            print(f"FAIL  iter {i} (seed {seed + i}): {why}")
+            if text:
+                os.makedirs(os.path.dirname(args.save_failure), exist_ok=True)
+                with open(args.save_failure, "wb") as f:
+                    f.write(text)
+                print(f"      program written to {args.save_failure}")
+            break
+        if (i + 1) % 10 == 0:
+            print(f"  {i + 1}/{args.iters} ok")
     print(f"\n{args.iters - failures} matched, {failures} mismatched")
     return 1 if failures else 0
 

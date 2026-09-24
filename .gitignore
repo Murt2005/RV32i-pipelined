@@ -5,13 +5,6 @@ build/
 *.hex
 *.vcd
 
-# FPGA
-fpga/ice40/build/
-
-# Firmware (pico-sdk out-of-tree build)
-firmware/build/
-firmware/pico-sdk
-
 # Python
 .venv/
 __pycache__/

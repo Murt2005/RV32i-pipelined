@@ -1,9 +1,0 @@
-rv32_top.sv
-uart.sv
-memory_spram.sv
-../../rtl/core/cpu.sv
-../../rtl/core/riscv.sv
-../../rtl/core/riscv32_common.sv
-../../rtl/mem/memory_io.sv
-../../rtl/core/base.sv
-../../rtl/core/system.sv
