@@ -54,6 +54,17 @@ endif
 LIBS=sw/libmc/libmc.a
 
 SIM_IVERILOG := build/sim/result-iverilog
+COSIM        := build/cosim/Vcosim_top
+
+# Which simulator runs the tests: iverilog, or cosim to check every instruction against Spike
+SIM ?= iverilog
+ifeq ($(SIM),iverilog)
+SIM_BIN := $(SIM_IVERILOG)
+else ifeq ($(SIM),cosim)
+SIM_BIN := $(COSIM)
+else
+$(error SIM must be iverilog or cosim)
+endif
 
 # memory.sv reads code0.hex..data3.hex (and sdram0..3.hex) from the simulator's
 # working directory. Each program's images go in their own directory here and
@@ -266,7 +277,7 @@ define run-rvtests
 		if ! $(4) build/$(3)/$$t.elf $$d >/dev/null 2>&1; then \
 			fail=$$((fail+1)); echo "FAIL $(1)-$$t  (hex conversion)"; continue; \
 		fi; \
-		raw=`cd $$d && $(CURDIR)/$(SIM_IVERILOG) $(SIM_ARGS) 2>/dev/null`; \
+		raw=`cd $$d && $(CURDIR)/$(SIM_BIN) $(if $(filter cosim,$(SIM)),$(CURDIR)/build/$(3)/$$t.elf) $(SIM_ARGS) 2>/dev/null`; \
 		th=`echo "$$raw" | sed -n 's/^TOHOST=\([0-9]*\).*/\1/p' | head -1`; \
 		cyc=`echo "$$raw" | sed -n 's/.*finish called at \([0-9]*\).*/\1/p' | head -1`; \
 		if [ "$$th" = "1" ]; then \
@@ -275,6 +286,7 @@ define run-rvtests
 			fail=$$((fail+1)); echo "FAIL $(1)-$$t  (test $$((th >> 1)))"; \
 		else \
 			fail=$$((fail+1)); echo "FAIL $(1)-$$t  (no tohost write)"; \
+			echo "$$raw" | grep -E "^(MISMATCH|TIMEOUT)" | head -1; \
 		fi; \
 	done; \
 	echo ""; echo "$$pass passed, $$fail failed, `echo $(2) | wc -w | tr -d ' '` total"; \
@@ -285,7 +297,7 @@ endef
 
 riscv-tests: $(RVTESTS_ELF)
 
-run-riscv-tests-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests
+run-riscv-tests-iverilog: $(TOOLS) $(SIM_BIN) riscv-tests
 	$(call run-rvtests,rv32ui$(SUITE_SUFFIX),$(RVTESTS),$(CONFIG)/riscv-tests/rv32ui,$(HEX_CONFIG))
 
 # --------------------------------------------------------------------
@@ -362,7 +374,7 @@ RVTESTS_M_ELF := $(addprefix $(RVTEST_OUT)/rv32um/,$(addsuffix .elf,$(RVTESTS_M)
 
 riscv-tests-m: $(RVTESTS_M_ELF)
 
-run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-m
+run-riscv-tests-m-iverilog: $(TOOLS) $(SIM_BIN) riscv-tests-m
 	$(call run-rvtests,rv32um$(SUITE_SUFFIX),$(RVTESTS_M),$(CONFIG)/riscv-tests/rv32um,$(HEX_CONFIG))
 
 # --------------------------------------------------------------------
@@ -380,7 +392,7 @@ RVTESTS_MI_ELF := $(addprefix $(RVTEST_OUT)/rv32mi/,$(addsuffix .elf,$(RVTESTS_M
 
 riscv-tests-mi: $(RVTESTS_MI_ELF)
 
-run-riscv-tests-mi-iverilog: $(TOOLS) $(SIM_IVERILOG) riscv-tests-mi
+run-riscv-tests-mi-iverilog: $(TOOLS) $(SIM_BIN) riscv-tests-mi
 	$(call run-rvtests,rv32mi$(SUITE_SUFFIX),$(RVTESTS_MI),$(CONFIG)/riscv-tests/rv32mi,$(HEX_CONFIG))
 
 $(eval $(call rvtest-rule,rv32ui,$(RVTESTS_DIR)))
@@ -467,14 +479,18 @@ $(SPIKE_PREFIX)/bin/spike:
 # Lockstep co-simulation against Spike: sim/cosim.cpp steps Spike once for
 # every instruction the core retires and stops at the first difference
 # --------------------------------------------------------------------
-COSIM := build/cosim/Vcosim_top
-
 $(COSIM): $(RTL_CORE) sim/cosim_top.sv sim/cosim.cpp $(SPIKE_PREFIX)/bin/spike
 	mkdir -p build/cosim
 	$(VERILATOR) -O3 --cc --build --exe --top-module cosim_top -Wno-fatal -DRVFI \
 		--Mdir build/cosim $(RTL_INC) sim/cosim_top.sv sim/cosim.cpp -o Vcosim_top \
 		-CFLAGS "-std=c++20 -I$(SPIKE_PREFIX)/include" \
 		-LDFLAGS "-L$(SPIKE_PREFIX)/lib -Wl,-rpath,$(SPIKE_PREFIX)/lib -lriscv -lfesvr"
+
+# Every riscv-test in both configurations, in lockstep with Spike
+.PHONY: cosim-check
+cosim-check:
+	@$(MAKE) --no-print-directory CONFIG=core SIM=cosim $(RVTEST_RUNS)
+	@$(MAKE) --no-print-directory CONFIG=system SIM=cosim $(RVTEST_RUNS)
 
 # --------------------------------------------------------------------
 # The divider's arithmetic on its own: every spec corner plus random pairs
