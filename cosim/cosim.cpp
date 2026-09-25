@@ -1,7 +1,9 @@
 // Lockstep co-simulation: steps Spike once for every instruction the core retires,
 // and stops at the first difference
 //
-//   Vcosim_top <elf> [+memlatency=N] [+stallrate=N] [+timeout=cycles]
+//   Vcosim_top <elf> [+memlatency=N] [+stallrate=N] [+timeout=cycles] [+trace]
+//
+// +trace prints every retired instruction; a mismatch always prints the last few
 //
 // Run it from the folder holding the program's hex images, like the other simulators
 
@@ -9,6 +11,7 @@
 #include <verilated.h>
 
 #include <riscv/cfg.h>
+#include <riscv/disasm.h>
 #include <riscv/processor.h>
 #include <riscv/simif.h>
 #include <fesvr/elfloader.h>
@@ -17,7 +20,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <iostream>
+#include <string>
 #include <vector>
 
 // The simulation top's memory map: IMEM, DMEM (with MMIO at its top) and SDRAM
@@ -126,7 +131,31 @@ int main(int argc, char** argv) {
     uint32_t regs[32] = {0};            // the core's registers, rebuilt from RVFI
     uint64_t retired = 0;
 
+    bool trace = Verilated::commandArgsPlusMatch("trace")[0] != 0;
+    std::deque<std::string> recent;     // the last few trace lines, for a mismatch
+    const size_t context = 10;
+
+    // One retired instruction as RVFI reports it, with Spike's disassembly
+    auto trace_line = [&]() {
+        char buf[160];
+        int n = std::snprintf(buf, sizeof buf, "  %7llu  %08x  %08x  %-26s",
+                              (unsigned long long)retired + 1, top.rvfi_pc_rdata, top.rvfi_insn,
+                              spike.get_disassembler()->disassemble(top.rvfi_insn).c_str());
+        if (top.rvfi_rd_addr)
+            n += std::snprintf(buf + n, sizeof buf - n, "  x%-2u <- %08x", top.rvfi_rd_addr, top.rvfi_rd_wdata);
+        if (top.rvfi_mem_rmask)
+            n += std::snprintf(buf + n, sizeof buf - n, "  load  %08x/%x", top.rvfi_mem_addr, top.rvfi_mem_rmask);
+        if (top.rvfi_mem_wmask)
+            n += std::snprintf(buf + n, sizeof buf - n, "  store %08x/%x <- %08x",
+                               top.rvfi_mem_addr, top.rvfi_mem_wmask, top.rvfi_mem_wdata);
+        if (top.rvfi_trap)
+            n += std::snprintf(buf + n, sizeof buf - n, "  trap");
+        return std::string(buf);
+    };
+
     auto fail = [&](const char* what, uint32_t core, uint32_t ref) {
+        if (!trace)
+            for (auto& line : recent) std::printf("%s\n", line.c_str());
         std::printf("MISMATCH after %llu instructions, at pc %08x (insn %08x): %s: core %08x, spike %08x\n",
                     (unsigned long long)retired, top.rvfi_pc_rdata, top.rvfi_insn, what, core, ref);
         std::exit(1);
@@ -139,6 +168,11 @@ int main(int argc, char** argv) {
         top.eval();
 
         if (!top.reset && top.rvfi_valid) {
+            std::string line = trace_line();
+            if (trace) std::printf("%s\n", line.c_str());
+            recent.push_back(line);
+            if (recent.size() > context) recent.pop_front();
+
             if ((uint32_t)s->pc != top.rvfi_pc_rdata) fail("pc", top.rvfi_pc_rdata, s->pc);
             uint32_t insn = mem.word(top.rvfi_pc_rdata);
             if (insn != top.rvfi_insn) fail("instruction", top.rvfi_insn, insn);
@@ -179,6 +213,8 @@ int main(int argc, char** argv) {
             return 0;
         }
     }
+    if (!trace)
+        for (auto& line : recent) std::printf("%s\n", line.c_str());
     std::printf("TIMEOUT after %u cycles, %llu instructions matched\n", timeout,
                 (unsigned long long)retired);
     return 1;

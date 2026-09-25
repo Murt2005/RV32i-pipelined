@@ -27,6 +27,12 @@ MEM_LATENCY ?= 0
 SIM_TIMEOUT ?= 120000
 SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_TIMEOUT)
 
+# TRACE=1 prints every instruction the co-simulator checks, with its RVFI fields
+SIM_ARGS += $(if $(TRACE),+trace)
+
+# Build steps keep their output in build/logs/ and show it only if they fail
+QUIET = > build/logs/$(@F).log 2>&1 || { tail -20 build/logs/$(@F).log; echo "build failed, full log in build/logs/$(@F).log"; exit 1; }
+
 help:
 	@echo "make [test]          every riscv-test suite in both configurations"
 	@echo "make rv32ui|rv32um|rv32mi   one suite in CONFIG"
@@ -37,7 +43,7 @@ help:
 	@echo "make dhrystone       Dhrystone in CONFIG"
 	@echo "make divider         the divider testbench"
 	@echo "make coverage        Verilator coverage over every suite"
-	@echo "options: CONFIG=core|system SIM=iverilog|cosim STALL_RATE MEM_LATENCY SIM_TIMEOUT"
+	@echo "options: CONFIG=core|system SIM=iverilog|cosim STALL_RATE MEM_LATENCY SIM_TIMEOUT TRACE=1"
 
 clean:
 	rm -rf build
@@ -63,17 +69,17 @@ RTL_INC := -Irtl/core -Irtl/mem -Irtl/bus -Isim
 RTL_SRC := $(wildcard rtl/*/*.sv sim/*.sv)
 
 $(SIM_IVERILOG): $(RTL_SRC)
-	@mkdir -p $(@D)
-	$(IVERILOG) -g2012 $(RTL_INC) -o $@ sim/itop.sv
+	@mkdir -p $(@D) build/logs; echo "building $@"
+	@$(IVERILOG) -g2012 $(RTL_INC) -o $@ sim/itop.sv $(QUIET)
 
 $(COV_SIM): $(RTL_SRC) sim/verilator-top.cpp
-	@mkdir -p $(@D)
-	$(VERILATOR) -O0 --cc --build --exe --top-module top --coverage -Wno-fatal \
-		--Mdir $(@D) $(RTL_INC) sim/top.sv sim/verilator-top.cpp -o Vtop
+	@mkdir -p $(@D) build/logs; echo "building $@"
+	@$(VERILATOR) -O0 --cc --build --exe --top-module top --coverage -Wno-fatal \
+		--Mdir $(@D) $(RTL_INC) sim/top.sv sim/verilator-top.cpp -o Vtop $(QUIET)
 
 $(DUMPHEX): tools/dumphex.c
-	@mkdir -p $(@D)
-	gcc -o $@ $<
+	@mkdir -p $(@D) build/logs
+	@gcc -o $@ $< $(QUIET)
 
 # riscv-tests; fence_i needs self-modifying code, ma_data misaligned access, pmpaddr PMP
 SUITES := rv32ui rv32um rv32mi
@@ -178,8 +184,8 @@ dhrystone: $(DHRY)/dhrystone.elf $(DUMPHEX) $(SIM_IVERILOG)
 		      printf "$(CONFIG): %d runs, %d cycles per run, %.3f DMIPS/MHz\n", r, c / r, 1e6 / (c / r) / 1757 }'
 
 build/sim/tb-divider: tests/tb-divider.sv rtl/core/divider.sv rtl/core/system.sv
-	@mkdir -p $(@D)
-	$(IVERILOG) -g2012 -Irtl/core -o $@ $<
+	@mkdir -p $(@D) build/logs
+	@$(IVERILOG) -g2012 -Irtl/core -o $@ $< $(QUIET)
 
 divider: build/sim/tb-divider
 	@$<
@@ -190,17 +196,17 @@ SPIKE := $(CURDIR)/build/spike
 spike: $(SPIKE)/bin/spike
 
 $(SPIKE)/bin/spike:
-	mkdir -p build/spike-build
-	cd build/spike-build && $(CURDIR)/cosim/riscv-isa-sim/configure --prefix=$(SPIKE)
-	MAKEFLAGS= $(MAKE) -C build/spike-build -j$(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
-	MAKEFLAGS= $(MAKE) -C build/spike-build install
+	@mkdir -p build/spike-build build/logs; echo "building spike, which takes a few minutes"
+	@(cd build/spike-build && $(CURDIR)/cosim/riscv-isa-sim/configure --prefix=$(SPIKE) && \
+		MAKEFLAGS= $(MAKE) -j$(shell sysctl -n hw.ncpu 2>/dev/null || nproc) && \
+		MAKEFLAGS= $(MAKE) install) $(QUIET)
 
 $(COSIM): $(RTL_SRC) cosim/cosim-top.sv cosim/cosim.cpp $(SPIKE)/bin/spike
-	@mkdir -p $(@D)
-	$(VERILATOR) -O3 --cc --build --exe --top-module cosim_top -Wno-fatal -DRVFI \
+	@mkdir -p $(@D) build/logs; echo "building $@"
+	@$(VERILATOR) -O3 --cc --build --exe --top-module cosim_top -Wno-fatal -DRVFI \
 		--Mdir $(@D) $(RTL_INC) cosim/cosim-top.sv cosim/cosim.cpp -o Vcosim_top \
 		-CFLAGS "-std=c++20 -I$(SPIKE)/include" \
-		-LDFLAGS "-L$(SPIKE)/lib -Wl,-rpath,$(SPIKE)/lib -lriscv -lfesvr"
+		-LDFLAGS "-L$(SPIKE)/lib -Wl,-rpath,$(SPIKE)/lib -lriscv -lfesvr" $(QUIET)
 
 cosim-check: $(DUMPHEX) $(COSIM) $(ALL_ELFS)
 	@$(RUN) $(COSIM) $(SIM_ARGS) $(ALL_ELFS)
@@ -218,17 +224,17 @@ build/rvgen/%.S: tools/rvgen.py FORCE
 cosim-random: $(DUMPHEX) $(COSIM) $(RVGEN_ELFS)
 	@$(RUN) $(COSIM) $(SIM_ARGS) $(RVGEN_ELFS)
 
-# Line and toggle coverage over every suite in both configurations: plain, with stalls, and with slow memory
+# Line, branch and toggle coverage over every suite in both configurations: plain, with stalls, and with slow memory
 define coverage-run
-@COVERAGE=build/cov/dat/$(1) $(RUN) $(COV_SIM) +timeout=20000000 $(2) $(ALL_ELFS) > build/cov/$(1).log
+@printf '%-8s ' $(1); COVERAGE=build/cov/dat/$(1) $(RUN) $(COV_SIM) +timeout=20000000 $(2) $(ALL_ELFS) \
+	> build/cov/$(1).log && tail -1 build/cov/$(1).log || { grep ^FAIL build/cov/$(1).log; exit 1; }
 endef
 
 coverage: $(DUMPHEX) $(COV_SIM) $(ALL_ELFS)
-	@rm -rf build/cov/dat
+	@rm -rf build/cov/dat build/cov/annotated
 	$(call coverage-run,plain,)
 	$(call coverage-run,stall,+stallrate=128)
 	$(call coverage-run,latency,+memlatency=4 +stallrate=128)
 	@verilator_coverage --write build/cov/merged.dat build/cov/dat/*/*.dat >/dev/null
-	@verilator_coverage --annotate build/cov/annotated --annotate-min 1 build/cov/merged.dat 2>&1 | tail -20
-	@echo "uncovered points (marked %000000 in build/cov/annotated/):"
-	@grep -rc "^%000000" build/cov/annotated/ | grep -v ":0$$" || echo "  none"
+	@verilator_coverage --annotate build/cov/annotated --annotate-min 1 build/cov/merged.dat >/dev/null
+	@python3 tools/coverage-report.py build/cov/merged.dat

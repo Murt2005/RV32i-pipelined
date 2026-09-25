@@ -98,13 +98,16 @@ This is the simulation top, `sim/top.sv`.
 | `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
 | `make cycle-check` | Cycle counts against the checked-in baselines for both configurations, to catch timing changes |
 | `make divider` | The divider on its own: every spec corner case plus random operands |
-| `make coverage` | Verilator line and toggle coverage over every suite in both configurations (84%) |
+| `make coverage` | Verilator coverage over every suite in both configurations, per file, with every line and branch never reached. Over `rtl/`: 91% of lines, 97% of branches, 60% of toggles |
 | `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
 `SIM=cosim` runs any suite target through the co-simulator instead of Icarus,
 for example `make rv32ui SIM=cosim CONFIG=system`. The
 co-simulator (`cosim/cosim.cpp`) steps Spike once for every instruction the core
-retires and stops at the first difference, printing both sides.
+retires and stops at the first difference, printing both sides and the ten
+instructions before it. `TRACE=1` prints every instruction it checks, with
+Spike's disassembly and the RVFI fields, e.g. `make cosim-random ITERS=1 TRACE=1`.
+Build output from Spike and the simulators goes to `build/logs/`.
 
 Excluded riscv-tests: `fence_i` (instruction and data memories are separate, so
 code can't be modified in place), `ma_data` (it expects misaligned accesses to

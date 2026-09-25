@@ -11,8 +11,8 @@
 sim="$1"; shift
 [[ $sim = /* ]] || sim="$PWD/$sim"
 
-args=()
-while [[ $1 = +* ]]; do args+=("$1"); shift; done
+args=(); trace=
+while [[ $1 = +* ]]; do args+=("$1"); [ "$1" = +trace ] && trace=1; shift; done
 
 if [ -n "$COVERAGE" ]; then
     [[ $COVERAGE = /* ]] || COVERAGE="$PWD/$COVERAGE"
@@ -38,12 +38,15 @@ for elf in "$@"; do
 
     tohost="$(sed -n 's/^TOHOST=\([0-9]*\).*/\1/p' <<< "$out" | head -1)"
     finish="$(sed -n 's/.*finish called at \([0-9]*\).*/\1/p' <<< "$out" | head -1)"
+    insns="$(sed -n 's/^\([0-9]*\) instructions match/\1/p' <<< "$out")"
+    [ -n "$trace" ] && { echo "== $name"; grep "^  " <<< "$out"; }
     if [ "$tohost" = 1 ]; then
-        pass=$((pass+1)); echo "PASS $name${finish:+  finish=$finish}"
+        pass=$((pass+1)); echo "PASS $name${finish:+  finish=$finish}${insns:+  $insns instructions}"
     elif [ -n "$tohost" ]; then
         fail=$((fail+1)); echo "FAIL $name  (test $((tohost >> 1)))"
     else
         fail=$((fail+1)); echo "FAIL $name  (no tohost write)"
+        [ -z "$trace" ] && grep "^  " <<< "$out"
         grep -E "^(MISMATCH|TIMEOUT)" <<< "$out" | head -1
     fi
 done
