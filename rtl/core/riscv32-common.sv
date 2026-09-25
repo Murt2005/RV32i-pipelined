@@ -17,7 +17,7 @@ typedef logic [`word_size - 1:0]            operand;
 typedef logic [`word_size - 1:0]            word;
 typedef logic [`word_address_size - 1:0]    word_address;
 
-typedef enum {
+typedef enum logic [2:0] {
      r_format = 0
     ,i_format
     ,s_format
