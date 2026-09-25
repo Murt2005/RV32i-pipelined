@@ -32,7 +32,7 @@ PS_PER_CYCLE = 10_000
 #     sim/itop.sv:78: $finish called at 15640000 (1ps)
 # tools/run-tests.sh swallows the simulator output and prints one line per
 # test, so it re-emits the timestamp itself:
-#     PASS rv32ui-add  finish=15640000
+#     PASS rv32ui-core-add  finish=15640000
 NAME_RE = re.compile(r"^===\s*(\S+)\s*===")
 FINISH_RE = re.compile(r"\$finish called at (\d+)")
 TIMEOUT_RE = re.compile(r"^TIMEOUT after (\d+) cycles")

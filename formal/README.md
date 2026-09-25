@@ -64,7 +64,7 @@ the Makefile builds one in `formal/rf/` out of symlinks into the riscv-formal
 submodule.
 
 The RVFI port lives in `cpu.sv` behind `` `ifdef RVFI ``, so the synthesised
-build carries none of it. `make cosim-check` validates it independently by
+build carries none of it. `make cosim-test` validates it independently by
 checking every retired instruction against Spike. That's worth running first:
 riscv-formal reasons entirely about what RVFI reports, so a wrong record gives
 wrong answers in both directions.

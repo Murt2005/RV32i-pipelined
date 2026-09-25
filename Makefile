@@ -7,8 +7,8 @@ AR := $(RISCV_PREFIX)-ar
 SHELL := /bin/bash
 
 .DEFAULT_GOAL := test
-.PHONY: test rv32ui rv32um rv32mi cycle-check cycle-baseline latency-sweep dhrystone \
-        divider cosim-check cosim-random coverage spike help clean FORCE
+.PHONY: test rv32ui rv32um rv32mi cosim-test cosim-test-rv32ui cosim-test-rv32um cosim-test-rv32mi \
+        cosim-random cycle-check cycle-baseline latency-sweep dhrystone divider coverage spike help clean FORCE
 .SECONDARY:
 
 # Configuration for single-suite targets, dhrystone and cosim-random:
@@ -18,32 +18,46 @@ ifeq ($(filter $(CONFIG),core system),)
 $(error CONFIG must be core or system)
 endif
 
-# Simulator for test runs: iverilog, or cosim to check every instruction against Spike
-SIM ?= iverilog
-
 # Random stalls out of 256, extra memory latency of 0..N cycles, and the watchdog in cycles
 STALL_RATE  ?= 0
 MEM_LATENCY ?= 0
 SIM_TIMEOUT ?= 120000
 SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_TIMEOUT)
 
-# TRACE=1 prints every instruction the co-simulator checks, with its RVFI fields
-SIM_ARGS += $(if $(TRACE),+trace)
+# Random programs for cosim-random
+ITERS  ?= 50
+SEED   ?= 1
+LENGTH ?= 200
 
 # Build steps keep their output in build/logs/ and show it only if they fail
 QUIET = > build/logs/$(@F).log 2>&1 || { tail -20 build/logs/$(@F).log; echo "build failed, full log in build/logs/$(@F).log"; exit 1; }
 
+define HELP
+command                       options (default)             what it does
+make [test]                   STALL_RATE=$(STALL_RATE)                  every riscv-test suite in both configurations, on Icarus
+                              MEM_LATENCY=$(MEM_LATENCY)
+                              SIM_TIMEOUT=$(SIM_TIMEOUT)
+make rv32ui|rv32um|rv32mi     CONFIG=$(CONFIG)                   one suite, on Icarus
+                              + the options of test
+make cosim-test               the options of test           every suite in both configurations, checked against Spike
+make cosim-test-rv32ui|um|mi  CONFIG=$(CONFIG)                   one suite, checked against Spike
+                              + the options of test
+make cosim-random             CONFIG=$(CONFIG) ITERS=$(ITERS)          random programs, checked against Spike
+                              SEED=$(SEED) LENGTH=$(LENGTH)
+                              + the options of test
+make cycle-check              -                             cycle counts per test against tests/cycles/
+make cycle-baseline           -                             record those cycle counts, overwriting them
+make latency-sweep            -                             every suite at memory latency 1 to 16, then with stalls
+make dhrystone                CONFIG=$(CONFIG) STALL_RATE=$(STALL_RATE)      Dhrystone on Icarus, in DMIPS/MHz
+                              MEM_LATENCY=$(MEM_LATENCY)
+make divider                  -                             the divider testbench
+make coverage                 -                             Verilator coverage over every suite, per file
+make clean                    -                             delete build/, including Spike
+endef
+
 help:
-	@echo "make [test]          every riscv-test suite in both configurations"
-	@echo "make rv32ui|rv32um|rv32mi   one suite in CONFIG"
-	@echo "make cycle-check     cycle counts against tests/cycles (cycle-baseline to record)"
-	@echo "make latency-sweep   every suite against slow memory, then with stalls too"
-	@echo "make cosim-check     every suite in lockstep with Spike"
-	@echo "make cosim-random    random programs in lockstep with Spike (ITERS, SEED, LENGTH)"
-	@echo "make dhrystone       Dhrystone in CONFIG"
-	@echo "make divider         the divider testbench"
-	@echo "make coverage        Verilator coverage over every suite"
-	@echo "options: CONFIG=core|system SIM=iverilog|cosim STALL_RATE MEM_LATENCY SIM_TIMEOUT TRACE=1"
+	$(info $(HELP))
+	@:
 
 clean:
 	rm -rf build
@@ -56,14 +70,7 @@ COSIM        := build/cosim/Vcosim_top
 COV_SIM      := build/cov/Vtop
 DUMPHEX      := build/tools/dumphex
 RUN          := tools/run-tests.sh
-
-ifeq ($(SIM),iverilog)
-SIM_BIN := $(SIM_IVERILOG)
-else ifeq ($(SIM),cosim)
-SIM_BIN := $(COSIM)
-else
-$(error SIM must be iverilog or cosim)
-endif
+COSIM_RUN    := TRACE=build/trace $(RUN) $(COSIM)
 
 RTL_INC := -Irtl/core -Irtl/mem -Irtl/bus -Isim
 RTL_SRC := $(wildcard rtl/*/*.sv sim/*.sv)
@@ -107,12 +114,12 @@ endef
 $(eval $(call elf-rules,core,$(RVENV)/link.ld,))
 $(eval $(call elf-rules,system,$(RVENV)/link-system.ld,$(RVENV)/boot.S))
 
-test: $(DUMPHEX) $(SIM_BIN) $(ALL_ELFS)
-	@$(RUN) $(SIM_BIN) $(SIM_ARGS) $(ALL_ELFS)
+test: $(DUMPHEX) $(SIM_IVERILOG) $(ALL_ELFS)
+	@$(RUN) $(SIM_IVERILOG) $(SIM_ARGS) $(ALL_ELFS)
 
-$(foreach s,$(SUITES),$(eval $(s): $(call elfs,$(CONFIG),$(s))))
-$(SUITES): $(DUMPHEX) $(SIM_BIN)
-	@$(RUN) $(SIM_BIN) $(SIM_ARGS) $(call elfs,$(CONFIG),$@)
+$(foreach s,$(SUITES),$(eval $(s) cosim-test-$(s): $(call elfs,$(CONFIG),$(s))))
+$(SUITES): $(DUMPHEX) $(SIM_IVERILOG)
+	@$(RUN) $(SIM_IVERILOG) $(SIM_ARGS) $(call elfs,$(CONFIG),$@)
 
 # Cycle counts per test against tests/cycles/<config>.json; any difference means timing changed
 define cycle-run
@@ -208,13 +215,13 @@ $(COSIM): $(RTL_SRC) cosim/cosim-top.sv cosim/cosim.cpp $(SPIKE)/bin/spike
 		-CFLAGS "-std=c++20 -I$(SPIKE)/include" \
 		-LDFLAGS "-L$(SPIKE)/lib -Wl,-rpath,$(SPIKE)/lib -lriscv -lfesvr" $(QUIET)
 
-cosim-check: $(DUMPHEX) $(COSIM) $(ALL_ELFS)
-	@$(RUN) $(COSIM) $(SIM_ARGS) $(ALL_ELFS)
+cosim-test: $(DUMPHEX) $(COSIM) $(ALL_ELFS)
+	@$(COSIM_RUN) $(SIM_ARGS) $(ALL_ELFS)
+
+$(addprefix cosim-test-,$(SUITES)): $(DUMPHEX) $(COSIM)
+	@$(COSIM_RUN) $(SIM_ARGS) $(call elfs,$(CONFIG),$(@:cosim-test-%=%))
 
 # Random programs from tools/rvgen.py, regenerated on every run
-ITERS  ?= 50
-SEED   ?= 1
-LENGTH ?= 200
 RVGEN_ELFS := $(patsubst %,build/$(CONFIG)/rvgen/%.elf,$(shell seq $(SEED) $$(($(SEED) + $(ITERS) - 1))))
 
 build/rvgen/%.S: tools/rvgen.py FORCE
@@ -222,7 +229,7 @@ build/rvgen/%.S: tools/rvgen.py FORCE
 	@python3 tools/rvgen.py $* $(LENGTH) > $@
 
 cosim-random: $(DUMPHEX) $(COSIM) $(RVGEN_ELFS)
-	@$(RUN) $(COSIM) $(SIM_ARGS) $(RVGEN_ELFS)
+	@$(COSIM_RUN) $(SIM_ARGS) $(RVGEN_ELFS)
 
 # Line, branch and toggle coverage over every suite in both configurations: plain, with stalls, and with slow memory
 define coverage-run

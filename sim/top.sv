@@ -40,8 +40,6 @@ memory_io_rsp   data_mem_rsp;
 riscv::word     inst_mem_addr;
 riscv::word     data_mem_addr;
 
-// The RVFI port is read hierarchically, by cosim/cosim-top.sv
-/* verilator lint_off PINMISSING */
 core the_core(
 	.clk(clk)
 	,.reset(reset)
@@ -56,7 +54,6 @@ core the_core(
 	,.inst_mem_addr(inst_mem_addr)
 	,.data_mem_addr(data_mem_addr)
 );
-/* verilator lint_on PINMISSING */
 
 always @(posedge clk) begin
     if (reset) begin

@@ -93,7 +93,8 @@ This is the simulation top, `sim/top.sv`.
 |---|---|
 | `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, in the core configuration and then the system configuration |
 | `make rv32ui`, `rv32um`, `rv32mi` | One suite, in `CONFIG` |
-| `make cosim-check` | Every riscv-test in both configurations in lockstep with [Spike](https://github.com/riscv-software-src/riscv-isa-sim), comparing every retired instruction |
+| `make cosim-test` | Every riscv-test in both configurations in lockstep with [Spike](https://github.com/riscv-software-src/riscv-isa-sim), comparing every retired instruction |
+| `make cosim-test-rv32ui`, `-rv32um`, `-rv32mi` | One suite in lockstep with Spike, in `CONFIG` |
 | `make cosim-random ITERS=100 SEED=1` | Random RV32IM programs from `tools/rvgen.py`, in lockstep with Spike, in `CONFIG` |
 | `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
 | `make cycle-check` | Cycle counts against the checked-in baselines for both configurations, to catch timing changes |
@@ -101,13 +102,13 @@ This is the simulation top, `sim/top.sv`.
 | `make coverage` | Verilator coverage over every suite in both configurations, per file, with every line and branch never reached. Over `rtl/`: 91% of lines, 97% of branches, 60% of toggles |
 | `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
-`SIM=cosim` runs any suite target through the co-simulator instead of Icarus,
-for example `make rv32ui SIM=cosim CONFIG=system`. The
-co-simulator (`cosim/cosim.cpp`) steps Spike once for every instruction the core
-retires and stops at the first difference, printing both sides and the ten
-instructions before it. `TRACE=1` prints every instruction it checks, with
-Spike's disassembly and the RVFI fields, e.g. `make cosim-random ITERS=1 TRACE=1`.
-Build output from Spike and the simulators goes to `build/logs/`.
+`make test` and the single suites run on Icarus; the `cosim-*` targets run the
+co-simulator (`cosim/cosim.cpp`), which steps Spike once for every instruction
+the core retires and stops at the first difference, printing both sides and the
+ten instructions before it. Every instruction it checks, with Spike's
+disassembly and the RVFI fields, goes to `build/trace/<test>.log`, e.g.
+`build/trace/rv32ui-system-lw.log`. Build output from Spike and the simulators
+goes to `build/logs/`, and `make help` lists every target with its options.
 
 Excluded riscv-tests: `fence_i` (instruction and data memories are separate, so
 code can't be modified in place), `ma_data` (it expects misaligned accesses to

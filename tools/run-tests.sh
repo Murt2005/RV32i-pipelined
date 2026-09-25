@@ -6,49 +6,53 @@
 #
 # Run from the repo root. ELFs live under build/<config>/, which picks the hex
 # converter; each one's images go in build/hex/<same path>, where the simulator
-# runs. With COVERAGE=<dir> set, each run also writes <dir>/<name>.dat
+# runs. With COVERAGE=<dir> set, each run also writes <dir>/<name>.dat, and
+# with TRACE=<dir> the co-simulator writes <dir>/<name>.log
 
 sim="$1"; shift
 [[ $sim = /* ]] || sim="$PWD/$sim"
 
-args=(); trace=
-while [[ $1 = +* ]]; do args+=("$1"); [ "$1" = +trace ] && trace=1; shift; done
+args=()
+while [[ $1 = +* ]]; do args+=("$1"); shift; done
 
-if [ -n "$COVERAGE" ]; then
-    [[ $COVERAGE = /* ]] || COVERAGE="$PWD/$COVERAGE"
-    mkdir -p "$COVERAGE"
-fi
+# The simulator runs from another folder, so output folders need absolute paths
+absdir() { mkdir -p "$1" && (cd "$1" && pwd); }
+[ -n "$COVERAGE" ] && COVERAGE="$(absdir "$COVERAGE")"
+[ -n "$TRACE" ] && TRACE="$(absdir "$TRACE")"
 
 pass=0; fail=0
 for elf in "$@"; do
     rel="${elf#build/}"; rel="${rel%.elf}"         # core/riscv-tests/rv32ui/add
     config="${rel%%/*}"
-    name="$(basename "$(dirname "$rel")")-$(basename "$rel")"
-    [ "$config" = system ] && name="${name/-/-sdram-}"  # the key tests/cycles/system.json uses
+    name="$(basename "$(dirname "$rel")")-$config-$(basename "$rel")"   # rv32ui-core-add
     hex="build/hex/$rel"
 
     if ! tools/elftohex-$config.sh "$elf" "$hex" >/dev/null 2>&1; then
         fail=$((fail+1)); echo "FAIL $name  (hex conversion)"; continue
     fi
 
-    cov=()
-    [ -n "$COVERAGE" ] && cov=("+coverage=$COVERAGE/$name.dat")
+    extra=()
+    [ -n "$COVERAGE" ] && extra+=("+coverage=$COVERAGE/$name.dat")
+    [ -n "$TRACE" ] && extra+=("+trace=$TRACE/$name.log")
     abs="$PWD/$elf"
-    out="$(cd "$hex" && "$sim" "$abs" "${args[@]}" "${cov[@]}" 2>/dev/null)"
+    out="$(cd "$hex" && "$sim" "$abs" "${args[@]}" "${extra[@]}" 2>/dev/null)"
 
     tohost="$(sed -n 's/^TOHOST=\([0-9]*\).*/\1/p' <<< "$out" | head -1)"
     finish="$(sed -n 's/.*finish called at \([0-9]*\).*/\1/p' <<< "$out" | head -1)"
     insns="$(sed -n 's/^\([0-9]*\) instructions match/\1/p' <<< "$out")"
-    [ -n "$trace" ] && { echo "== $name"; grep "^  " <<< "$out"; }
     if [ "$tohost" = 1 ]; then
         pass=$((pass+1)); echo "PASS $name${finish:+  finish=$finish}${insns:+  $insns instructions}"
-    elif [ -n "$tohost" ]; then
-        fail=$((fail+1)); echo "FAIL $name  (test $((tohost >> 1)))"
+        continue
+    fi
+    fail=$((fail+1))
+    if [ -n "$tohost" ]; then
+        echo "FAIL $name  (test $((tohost >> 1)))"
     else
-        fail=$((fail+1)); echo "FAIL $name  (no tohost write)"
-        [ -z "$trace" ] && grep "^  " <<< "$out"
+        echo "FAIL $name  (no tohost write)"
+        grep "^  " <<< "$out"
         grep -E "^(MISMATCH|TIMEOUT)" <<< "$out" | head -1
     fi
+    [ -n "$TRACE" ] && echo "full trace: ${TRACE#$PWD/}/$name.log"
 done
 
 echo ""

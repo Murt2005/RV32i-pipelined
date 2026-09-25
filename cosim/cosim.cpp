@@ -1,9 +1,9 @@
 // Lockstep co-simulation: steps Spike once for every instruction the core retires,
 // and stops at the first difference
 //
-//   Vcosim_top <elf> [+memlatency=N] [+stallrate=N] [+timeout=cycles] [+trace]
+//   Vcosim_top <elf> [+memlatency=N] [+stallrate=N] [+timeout=cycles] [+trace=file]
 //
-// +trace prints every retired instruction; a mismatch always prints the last few
+// +trace writes every checked instruction to a file; a mismatch prints the last few
 //
 // Run it from the folder holding the program's hex images, like the other simulators
 
@@ -131,9 +131,20 @@ int main(int argc, char** argv) {
     uint32_t regs[32] = {0};            // the core's registers, rebuilt from RVFI
     uint64_t retired = 0;
 
-    bool trace = Verilated::commandArgsPlusMatch("trace")[0] != 0;
+    const char* trace_arg = std::strchr(Verilated::commandArgsPlusMatch("trace="), '=');
+    FILE* trace = trace_arg ? std::fopen(trace_arg + 1, "w") : nullptr;
     std::deque<std::string> recent;     // the last few trace lines, for a mismatch
     const size_t context = 10;
+
+    char header[160];
+    std::snprintf(header, sizeof header, "  %7s  %-8s  %-8s  %-26s  %s", "count", "pc", "insn",
+                  "disassembly", "register write, memory access");
+    if (trace) std::fprintf(trace, "%s\n", header);
+
+    auto print_recent = [&]() {
+        std::printf("%s\n", header);
+        for (auto& line : recent) std::printf("%s\n", line.c_str());
+    };
 
     // One retired instruction as RVFI reports it, with Spike's disassembly
     auto trace_line = [&]() {
@@ -154,8 +165,7 @@ int main(int argc, char** argv) {
     };
 
     auto fail = [&](const char* what, uint32_t core, uint32_t ref) {
-        if (!trace)
-            for (auto& line : recent) std::printf("%s\n", line.c_str());
+        print_recent();
         std::printf("MISMATCH after %llu instructions, at pc %08x (insn %08x): %s: core %08x, spike %08x\n",
                     (unsigned long long)retired, top.rvfi_pc_rdata, top.rvfi_insn, what, core, ref);
         std::exit(1);
@@ -169,7 +179,7 @@ int main(int argc, char** argv) {
 
         if (!top.reset && top.rvfi_valid) {
             std::string line = trace_line();
-            if (trace) std::printf("%s\n", line.c_str());
+            if (trace) std::fprintf(trace, "%s\n", line.c_str());
             recent.push_back(line);
             if (recent.size() > context) recent.pop_front();
 
@@ -213,8 +223,7 @@ int main(int argc, char** argv) {
             return 0;
         }
     }
-    if (!trace)
-        for (auto& line : recent) std::printf("%s\n", line.c_str());
+    print_recent();
     std::printf("TIMEOUT after %u cycles, %llu instructions matched\n", timeout,
                 (unsigned long long)retired);
     return 1;
