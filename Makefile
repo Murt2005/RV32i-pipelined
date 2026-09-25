@@ -65,7 +65,7 @@ clean:
 FORCE:
 
 # Simulators
-SIM_IVERILOG := build/sim/result-iverilog
+ICARUS_SIM := build/sim/itop
 COSIM        := build/cosim/Vcosim_top
 COV_SIM      := build/cov/Vtop
 DUMPHEX      := build/tools/dumphex
@@ -75,7 +75,7 @@ COSIM_RUN    := TRACE=build/trace $(RUN) $(COSIM)
 RTL_INC := -Irtl/core -Irtl/mem -Irtl/bus -Isim
 RTL_SRC := $(wildcard rtl/*/*.sv sim/*.sv)
 
-$(SIM_IVERILOG): $(RTL_SRC)
+$(ICARUS_SIM): $(RTL_SRC)
 	@mkdir -p $(@D) build/logs; echo "building $@"
 	@$(IVERILOG) -g2012 $(RTL_INC) -o $@ sim/itop.sv $(QUIET)
 
@@ -114,22 +114,22 @@ endef
 $(eval $(call elf-rules,core,$(RVENV)/link.ld,))
 $(eval $(call elf-rules,system,$(RVENV)/link-system.ld,$(RVENV)/boot.S))
 
-test: $(DUMPHEX) $(SIM_IVERILOG) $(ALL_ELFS)
-	@$(RUN) $(SIM_IVERILOG) $(SIM_ARGS) $(ALL_ELFS)
+test: $(DUMPHEX) $(ICARUS_SIM) $(ALL_ELFS)
+	@$(RUN) $(ICARUS_SIM) $(SIM_ARGS) $(ALL_ELFS)
 
 $(foreach s,$(SUITES),$(eval $(s) cosim-test-$(s): $(call elfs,$(CONFIG),$(s))))
-$(SUITES): $(DUMPHEX) $(SIM_IVERILOG)
-	@$(RUN) $(SIM_IVERILOG) $(SIM_ARGS) $(call elfs,$(CONFIG),$@)
+$(SUITES): $(DUMPHEX) $(ICARUS_SIM)
+	@$(RUN) $(ICARUS_SIM) $(SIM_ARGS) $(call elfs,$(CONFIG),$@)
 
 # Cycle counts per test against tests/cycles/<config>.json; any difference means timing changed
 define cycle-run
-@$(RUN) $(SIM_IVERILOG) $(call elfs,$(1)) > build/cycles/$(1).log
+@$(RUN) $(ICARUS_SIM) $(call elfs,$(1)) > build/cycles/$(1).log
 @echo "== $(1)"; python3 tools/cycle-report.py $(MODE) tests/cycles/$(1).json build/cycles/$(1).log
 endef
 
 cycle-baseline: MODE := --save
 cycle-check:    MODE := --compare
-cycle-baseline cycle-check: $(DUMPHEX) $(SIM_IVERILOG) $(ALL_ELFS)
+cycle-baseline cycle-check: $(DUMPHEX) $(ICARUS_SIM) $(ALL_ELFS)
 	@mkdir -p build/cycles
 	$(call cycle-run,core)
 	$(call cycle-run,system)
@@ -137,10 +137,10 @@ cycle-baseline cycle-check: $(DUMPHEX) $(SIM_IVERILOG) $(ALL_ELFS)
 # Every suite against slow memory, then with stalls too; each run is latency:stall rate:watchdog
 SWEEP := 1:0:300000 2:0:450000 4:0:750000 8:0:1350000 16:0:2550000 8:128:4000000
 
-latency-sweep: $(DUMPHEX) $(SIM_IVERILOG) $(ALL_ELFS)
+latency-sweep: $(DUMPHEX) $(ICARUS_SIM) $(ALL_ELFS)
 	@rc=0; for r in $(SWEEP); do set -- $${r//:/ }; \
 		log=build/sweep-$$1-$$2.log; printf 'MEM_LATENCY=%-3s STALL_RATE=%-4s ' $$1 $$2; \
-		$(RUN) $(SIM_IVERILOG) +memlatency=$$1 +stallrate=$$2 +timeout=$$3 $(ALL_ELFS) > $$log \
+		$(RUN) $(ICARUS_SIM) +memlatency=$$1 +stallrate=$$2 +timeout=$$3 $(ALL_ELFS) > $$log \
 			&& echo ok || { echo "FAILED, see $$log"; rc=1; }; \
 	done; exit $$rc
 
@@ -182,9 +182,9 @@ $(DHRY)/dhrystone.elf: $(DHRY_OBJS) $(LIBMC) $(DHRY_LD)
 	$(LD) -m $(LDEMUL) --script $(DHRY_LD) --no-warn-rwx-segments -o $@ $(DHRY_OBJS) \
 		-Lbuild/libmc -lmc -L$(RISCV_LIB) -lgcc
 
-dhrystone: $(DHRY)/dhrystone.elf $(DUMPHEX) $(SIM_IVERILOG)
+dhrystone: $(DHRY)/dhrystone.elf $(DUMPHEX) $(ICARUS_SIM)
 	@tools/elftohex-$(CONFIG).sh $< build/hex/$(CONFIG)/dhrystone
-	@cd build/hex/$(CONFIG)/dhrystone && $(CURDIR)/$(SIM_IVERILOG) +timeout=5000000 \
+	@cd build/hex/$(CONFIG)/dhrystone && $(CURDIR)/$(ICARUS_SIM) +timeout=5000000 \
 		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) 2>/dev/null | \
 	awk -F= '/^CYCLES=/ { c = $$2 } /^RUNS=/ { r = $$2 } \
 		END { if (!r) { print "dhrystone did not finish"; exit 1 } \
