@@ -1,0 +1,16 @@
+# Verible lint rules on top of the default set; list them with verible-verilog-lint --help_rules=all
+# one rule per line: -rule disables, +rule or rule enables, rule=param:value;param:value configures
+
+line-length=length:120
+always-ff-non-blocking=waive_for_locals:true
+
+# include guards are lowercase, e.g. `_bus_arbiter_sv
+-macro-name-style
+# files are hyphenated (arbiter.sv), modules are not (bus_arbiter)
+-module-filename
+# localparams are lowercase
+-parameter-name-style
+-explicit-parameter-storage-type
+-unpacked-dimensions-range-ordering
+-explicit-function-lifetime
+-explicit-function-task-parameter-type

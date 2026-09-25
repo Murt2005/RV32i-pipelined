@@ -8,7 +8,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := test
 .PHONY: test rv32ui rv32um rv32mi cosim-test cosim-test-rv32ui cosim-test-rv32um cosim-test-rv32mi \
-        cosim-random cycle-check cycle-baseline latency-sweep dhrystone divider coverage spike help clean FORCE
+        cosim-random cycle-check cycle-baseline latency-sweep dhrystone divider coverage spike lint format format-check help clean FORCE
 .SECONDARY:
 
 # Configuration for single-suite targets, dhrystone and cosim-random:
@@ -52,6 +52,9 @@ make dhrystone                CONFIG=$(CONFIG) STALL_RATE=$(STALL_RATE)      Dhr
                               MEM_LATENCY=$(MEM_LATENCY)
 make divider                  -                             the divider testbench
 make coverage                 -                             Verilator coverage over every suite, per file
+make lint                     SV_FILES=(every .sv)          Verible lint, rules in .rules.verible_lint
+make format                   SV_FILES=(every .sv)          reformat in place with Verible, flags in .verible-format
+make format-check             SV_FILES=(every .sv)          list files that format would change
 make clean                    -                             delete build/, including Spike
 endef
 
@@ -196,6 +199,18 @@ build/sim/tb-divider: tests/tb-divider.sv rtl/core/divider.sv rtl/core/system.sv
 
 divider: build/sim/tb-divider
 	@$<
+
+# Verible lint and formatting; SV_FILES narrows either to some files
+SV_FILES ?= $(wildcard rtl/*/*.sv sim/*.sv cosim/*.sv formal/*.sv tests/*.sv)
+
+lint:
+	@$(VERIBLE)/verible-verilog-lint --rules_config=.rules.verible_lint $(SV_FILES)
+
+format:
+	@$(VERIBLE)/verible-verilog-format --flagfile=.verible-format --inplace $(SV_FILES)
+
+format-check:
+	@$(VERIBLE)/verible-verilog-format --flagfile=.verible-format --verify --inplace $(SV_FILES)
 
 # Spike, built from the cosim/riscv-isa-sim submodule into build/spike
 SPIKE := $(CURDIR)/build/spike

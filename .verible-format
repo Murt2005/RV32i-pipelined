@@ -1,0 +1,7 @@
+--indentation_spaces=4
+--wrap_spaces=4
+--column_limit=120
+--port_declarations_alignment=align
+--named_port_alignment=align
+--assignment_statement_alignment=align
+--case_items_alignment=align

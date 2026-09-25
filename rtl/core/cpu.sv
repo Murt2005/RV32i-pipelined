@@ -396,6 +396,17 @@ endmodule
 // and pc_control for redirecting fetch. Uses bypass from decode/writeback and later
 // stages to resolve RAW hazards.
 module execute(
+`ifdef RVFI
+    output logic                                rvfi_ex_valid,
+    output logic                                [31:0] rvfi_ex_insn,
+    output logic                                [31:0] rvfi_ex_pc,
+    output logic                                [31:0] rvfi_ex_next_pc,
+    output logic                                [4:0]  rvfi_ex_rs1_addr,
+    output logic                                [4:0]  rvfi_ex_rs2_addr,
+    output logic                                [31:0] rvfi_ex_rs1_rdata,
+    output logic                                [31:0] rvfi_ex_rs2_rdata,
+    output logic                                rvfi_ex_trap,
+`endif
     input logic                                 clk,
     input logic                                 reset,
     input riscv::word                           reset_pc,
@@ -416,17 +427,6 @@ module execute(
     output btb_update_t                         btb_update_out,
 
     output logic                                div_wait
-`ifdef RVFI
-    ,output logic                               rvfi_ex_valid
-    ,output logic                               [31:0] rvfi_ex_insn
-    ,output logic                               [31:0] rvfi_ex_pc
-    ,output logic                               [31:0] rvfi_ex_next_pc
-    ,output logic                               [4:0]  rvfi_ex_rs1_addr
-    ,output logic                               [4:0]  rvfi_ex_rs2_addr
-    ,output logic                               [31:0] rvfi_ex_rs1_rdata
-    ,output logic                               [31:0] rvfi_ex_rs2_rdata
-    ,output logic                               rvfi_ex_trap
-`endif
 );
 
 import riscv::*;
@@ -1015,6 +1015,29 @@ module core #(
     parameter btb_enable  = 1,
     parameter btb_entries = 8
 ) (
+`ifdef RVFI
+    output logic                                rvfi_valid,
+    output logic                                [63:0] rvfi_order,
+    output logic                                [31:0] rvfi_insn,
+    output logic                                rvfi_trap,
+    output logic                                rvfi_halt,
+    output logic                                rvfi_intr,
+    output logic                                [1:0]  rvfi_mode,
+    output logic                                [1:0]  rvfi_ixl,
+    output logic                                [4:0]  rvfi_rs1_addr,
+    output logic                                [4:0]  rvfi_rs2_addr,
+    output logic                                [31:0] rvfi_rs1_rdata,
+    output logic                                [31:0] rvfi_rs2_rdata,
+    output logic                                [4:0]  rvfi_rd_addr,
+    output logic                                [31:0] rvfi_rd_wdata,
+    output logic                                [31:0] rvfi_pc_rdata,
+    output logic                                [31:0] rvfi_pc_wdata,
+    output logic                                [31:0] rvfi_mem_addr,
+    output logic                                [3:0]  rvfi_mem_rmask,
+    output logic                                [3:0]  rvfi_mem_wmask,
+    output logic                                [31:0] rvfi_mem_rdata,
+    output logic                                [31:0] rvfi_mem_wdata,
+`endif
     input logic                                 clk,
     input logic                                 reset,
 
@@ -1030,29 +1053,6 @@ module core #(
     output memory_io_req                        data_mem_req,
     input memory_io_rsp                         data_mem_rsp,
     output riscv::word                          data_mem_addr
-`ifdef RVFI
-    ,output logic                               rvfi_valid
-    ,output logic                               [63:0] rvfi_order
-    ,output logic                               [31:0] rvfi_insn
-    ,output logic                               rvfi_trap
-    ,output logic                               rvfi_halt
-    ,output logic                               rvfi_intr
-    ,output logic                               [1:0]  rvfi_mode
-    ,output logic                               [1:0]  rvfi_ixl
-    ,output logic                               [4:0]  rvfi_rs1_addr
-    ,output logic                               [4:0]  rvfi_rs2_addr
-    ,output logic                               [31:0] rvfi_rs1_rdata
-    ,output logic                               [31:0] rvfi_rs2_rdata
-    ,output logic                               [4:0]  rvfi_rd_addr
-    ,output logic                               [31:0] rvfi_rd_wdata
-    ,output logic                               [31:0] rvfi_pc_rdata
-    ,output logic                               [31:0] rvfi_pc_wdata
-    ,output logic                               [31:0] rvfi_mem_addr
-    ,output logic                               [3:0]  rvfi_mem_rmask
-    ,output logic                               [3:0]  rvfi_mem_wmask
-    ,output logic                               [31:0] rvfi_mem_rdata
-    ,output logic                               [31:0] rvfi_mem_wdata
-`endif
 );
 
 import riscv::*;

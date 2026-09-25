@@ -27,3 +27,17 @@ The formal checks haven't been rerun since the machine-mode CSR and trap changes
 ## A C runtime for programs in SDRAM
 
 `sw/runtime` and `sw/examples/hello.c` were removed; they're in git history before this change. They linked newlib programs into SDRAM: a reset stub in IMEM that set the stack, cleared `.bss` and jumped to `main`, a linker script, and the syscalls newlib needs (`_write` to the putchar register, `_exit` to halt, `_sbrk` for a heap from `_end`). `hello.c` checked printf, malloc, string.h, M-extension C code and `mcycle`. Something like it is the only test of the cache/SDRAM path with compiler-generated code. If it comes back, drop the in-memory file layer (`_open`/`_read`/`_lseek`), which was only there for Doom's WAD. Remember `-mstrict-align` too: misaligned accesses trap, and `mtvec` is 0.
+
+## Verible lint findings
+
+`make lint` reports 47 findings with the rules in `.rules.verible_lint`:
+
+- 14 lines over 120 columns, mostly in `cpu.sv`
+- tabs in `sim/top.sv` (12) and trailing spaces in `riscv32-common.sv` (4)
+- `case` without a `default` at `riscv32-common.sv:497`, `512` and `533`
+- `always @*` at `cpu.sv:181`, which should be `always_comb`
+- `$random` in `tests/tb-divider.sv:137-138`, which Verible wants as `$urandom`
+- `$test$plusargs` in `sim/itop.sv:28`
+- 7 enums in `riscv32-common.sv` and 2 structs in `memory-io.sv` not ending in `_t`: rename them, or add `-enum-name-style` and `-struct-union-name-style` to the rules
+
+The formatter isn't applied yet either: `make format` reindents nearly every file, since Verible always indents module bodies. Do it as its own commit and list that commit in `.git-blame-ignore-revs`.
