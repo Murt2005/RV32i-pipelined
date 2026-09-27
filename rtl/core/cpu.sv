@@ -426,6 +426,7 @@ module execute(
     output pc_control_t                         pc_control_out,
     output btb_update_t                         btb_update_out,
 
+    input logic                                 data_memory_wait,
     output logic                                div_wait
 );
 
@@ -446,7 +447,9 @@ wire is_div_op = decoded_instruction_in.is_instruction_valid
 logic        div_busy, div_done;
 word         div_result;
 
-wire div_start = is_div_op & ~div_busy & ~div_done & ~is_load_use_hazard(executed_instruction_in, decoded_instruction_in);
+// A load in EX/MEM, or one in MEM/WB still waiting for data, can't forward yet
+wire div_start = is_div_op & ~div_busy & ~div_done & ~data_memory_wait
+               & ~is_load_use_hazard(executed_instruction_in, decoded_instruction_in);
 wire div_take  = is_div_op &  div_done & execute_control_signal_in.advance;
 
 assign div_wait = (is_div_op & ~div_done) | div_busy;
@@ -1126,6 +1129,7 @@ execute execute_m(
     .executed_instruction_out(executed_instruction),
     .pc_control_out(pc_control),
     .btb_update_out(btb_update),
+    .data_memory_wait(data_memory_wait),
     .div_wait(div_wait)
 `ifdef RVFI
     ,.rvfi_ex_valid(rvfi_ex_valid)

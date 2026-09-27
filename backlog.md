@@ -1,17 +1,5 @@
 # Backlog
 
-## Divider starts with a stale operand behind a slow load
-
-Found by the random co-simulation: `make cosim-random CONFIG=system SEED=1039 ITERS=1`.
-
-```
-80000308  lhu  s7, 184(t6)     # loads 0xd119 from SDRAM, through the D-cache
-8000030c  sltiu t0, ra, 70
-80000310  remu s5, t2, s7      # core writes 0x8000016c (= t2), Spike 0x1da6
-```
-
-RVFI shows the `remu` read the right divisor (0xd119), but the result is the dividend unchanged, which is what dividing by 0 gives. The divider seems to start before the load two instructions ahead has returned: its start condition only checks `is_load_use_hazard`, a load immediately before. It only shows up with a multi-cycle load, so the system configuration, and passes in the core configuration.
-
 ## Liveness counterexample with the external stall
 
 riscv-formal's `liveness_ch0` found that one stalled cycle with a `jal` in fetch leaves the instruction latched and never retiring: the core is busy rather than hung, so no watchdog catches it. The simulation's random stall injection and the formal wrapper both drive `stall`. Not fixed yet. The original note is in `cf35b72:fpga/de1soc/rv32_de1soc.sv`.
