@@ -39,14 +39,13 @@ module rvfi_wrapper (
     (* keep *) `rvformal_rand_reg       inst_rand_delay, data_rand_delay;
 
     // Memory target: one access at a time, 1 or 2 cycles of latency, address echoed back
-    // ready is forced high after two refusals in a row
+    // ready is forced high while env_force is set
     `define MEM_TARGET(NAME, REQ, RSP, RDATA, RAND_READY, RAND_DELAY)          \
         logic NAME``_busy;                                                     \
-        logic [1:0] NAME``_refuse;                                             \
         logic NAME``_rsp_valid;                                                \
         logic [`word_address_size-1:0] NAME``_rsp_addr;                        \
                                                                                \
-        wire NAME``_ready  = ~NAME``_busy & (RAND_READY | NAME``_refuse[1]);   \
+        wire NAME``_ready  = ~NAME``_busy & (RAND_READY | env_force);          \
         wire NAME``_accept = REQ.valid & NAME``_ready                          \
                            & (is_any_byte(REQ.do_read) | is_any_byte(REQ.do_write)); \
                                                                                \
@@ -54,12 +53,8 @@ module rvfi_wrapper (
             if (reset) begin                                                   \
                 NAME``_busy      <= 1'b0;                                      \
                 NAME``_rsp_valid <= 1'b0;                                      \
-                NAME``_refuse    <= 2'd0;                                      \
             end else begin                                                     \
                 NAME``_rsp_valid <= 1'b0;                                      \
-                                                                               \
-                if (NAME``_busy | RAND_READY) NAME``_refuse <= 2'd0;           \
-                else                          NAME``_refuse <= NAME``_refuse + 2'd1; \
                                                                                \
                 if (NAME``_accept) begin                                       \
                     NAME``_rsp_addr <= REQ.addr;                               \
@@ -81,20 +76,25 @@ module rvfi_wrapper (
             RSP.ready = NAME``_ready;                                          \
         end
 
-    // External stall from the solver, at most two cycles in a row so the core keeps retiring
+    // External stall from the solver
     (* keep *) `rvformal_rand_reg stall_rand;
 
-    logic [1:0] stall_run;
-    always @(posedge clock) begin
-        if (reset)                 stall_run <= 2'd0;
-        else if (core_stall)       stall_run <= stall_run + 2'd1;
-        else                       stall_run <= 2'd0;
-    end
-
-    wire core_stall = stall_rand & ~stall_run[1];
+    // One budget for stalls and refusals together: bounded separately, the solver lines them up and never lets a fetch in
+    // After two hostile cycles in a row, the next has no stall and both memories ready unless busy
+    logic [1:0] hostile_run;
+    wire env_force  = hostile_run[1];
+    wire core_stall = stall_rand & ~env_force;
 
     `MEM_TARGET(imem, inst_req, inst_rsp, imem_rdata, inst_rand_ready, inst_rand_delay)
     `MEM_TARGET(dmem, data_req, data_rsp, dmem_rdata, data_rand_ready, data_rand_delay)
+
+    wire hostile = core_stall | (~imem_busy & ~imem_ready) | (~dmem_busy & ~dmem_ready);
+
+    always @(posedge clock) begin
+        if (reset)        hostile_run <= 2'd0;
+        else if (hostile) hostile_run <= hostile_run + 2'd1;
+        else              hostile_run <= 2'd0;
+    end
 
     core #(
         .btb_enable(1),

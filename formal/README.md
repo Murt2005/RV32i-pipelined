@@ -117,6 +117,9 @@ solver: a request can be refused, and a response can arrive one or two cycles
 later, so the core's stall paths are checked too. The external `stall` input is
 driven by the solver as well.
 
-All of this is bounded: at most two refusals or stalled cycles in a row. A
-memory that never answers really would deadlock the core, and `liveness` would
-then fail on the environment rather than the design.
+All of this is bounded by one budget: after two hostile cycles in a row (a
+stall, or a memory that isn't busy refusing a request), the next cycle has no
+stall and both memories ready. Bounding stalls and refusals separately isn't
+enough, because the solver lines them up so the memory is only ready while the
+core is stalled. A memory that never answers really would deadlock the core,
+and `liveness` would then fail on the environment rather than the design.
