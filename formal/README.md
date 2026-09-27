@@ -53,10 +53,25 @@ The M checks are kept out of `run-insn`. Multiply is an equivalence check
 between two multiplier structures, which SMT solvers handle badly, and divide
 needs depth 56 before an iterative divide can retire.
 
-**Status.** The checks haven't been rerun since the machine-mode CSR and trap
-changes. `liveness` has an open counterexample: with the external `stall`
-input asserted for one cycle while a `jal` is in fetch, the instruction stays
-latched and never retires.
+## Status
+
+Last run on 2026-09-26, after the machine-mode CSR and trap changes:
+
+| Checks | Result |
+|---|---|
+| `insn_*` for RV32I (37) | all PASS, about 5 minutes each, 2h56m in total |
+| `causal` | PASS in 12 minutes |
+| `cover` | PASS in 11 minutes: both cover statements reached at step 30 |
+| `hang`, `ill`, `liveness`, `pc_bwd`, `pc_fwd`, `reg`, `unique` | not rerun yet |
+| `insn_*` for M (8) | not rerun yet |
+
+`liveness` has an open counterexample from an earlier run: with the external
+`stall` input asserted for one cycle while a `jal` is in fetch, the instruction
+stays latched and never retires.
+
+Every check here is bounded model checking, so a PASS covers what the core can
+reach within the check's depth after reset (24 cycles for the RV32I
+instructions), not every state.
 
 ## How it is wired
 

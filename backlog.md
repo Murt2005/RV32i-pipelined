@@ -10,7 +10,7 @@ riscv-formal's `liveness_ch0` found that one stalled cycle with a `jal` in fetch
 
 ## Rerun riscv-formal
 
-The formal checks haven't been rerun since the machine-mode CSR and trap changes. `make -C formal run-insn` and `run-consistency` take hours.
+The 37 RV32I instruction checks, `causal` and `cover` passed on 2026-09-26, after the machine-mode CSR and trap changes. Still to rerun: `hang`, `ill`, `liveness`, `pc_bwd`, `pc_fwd`, `reg` and `unique` (the rest of `make -C formal run-consistency`), and the eight M checks (`make -C formal run-m`, which takes hours). `formal/README.md` has the full status.
 
 ## A C runtime for programs in SDRAM
 
