@@ -25,7 +25,7 @@ cd formal && sby -f smoke.sby      # expect FAIL with a counterexample trace
 
 ## Checks
 
-`checks.cfg` targets RV32IM, which generates 51 checks:
+`checks.cfg` targets RV32IM, which generates 54 checks:
 
 | Check | What it proves |
 |---|---|
@@ -35,6 +35,9 @@ cd formal && sby -f smoke.sby      # expect FAIL with a counterexample trace
 | `causal` | an instruction never depends on a value produced after it |
 | `unique` | `rvfi_order` is strictly increasing, so nothing retires twice |
 | `liveness` | the core always eventually retires an instruction |
+| `ill` | an all-zero instruction traps and writes neither a register nor memory |
+| `hang` | at least one instruction retires within 30 cycles of reset |
+| `cover` | two retirements and one trap are reachable, so the other checks aren't passing vacuously |
 
 ```bash
 cd formal
@@ -42,7 +45,7 @@ make checks                        # generate the .sby files
 make list                          # what was generated
 make one CHECK=insn_addi_ch0       # a single check
 make run-insn                      # the RV32I instruction checks
-make run-consistency               # reg, pc_fwd, pc_bwd, causal, unique, liveness
+make run-consistency               # reg, pc_fwd, pc_bwd, causal, unique, liveness, ill, hang, cover
 make run-m                         # the eight M checks, which take hours
 ```
 
