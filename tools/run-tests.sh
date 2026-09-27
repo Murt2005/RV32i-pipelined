@@ -6,8 +6,7 @@
 #
 # Run from the repo root. ELFs live under build/<config>/, which picks the hex
 # converter; each one's images go in build/hex/<same path>, where the simulator
-# runs. With COVERAGE=<dir> set, each run also writes <dir>/<name>.dat, and
-# with TRACE=<dir> the co-simulator writes <dir>/<name>.log
+# runs. With TRACE=<dir> the co-simulator writes <dir>/<name>.log
 
 sim="$1"; shift
 [[ $sim = /* ]] || sim="$PWD/$sim"
@@ -17,7 +16,6 @@ while [[ $1 = +* ]]; do args+=("$1"); shift; done
 
 # The simulator runs from another folder, so output folders need absolute paths
 absdir() { mkdir -p "$1" && (cd "$1" && pwd); }
-[ -n "$COVERAGE" ] && COVERAGE="$(absdir "$COVERAGE")"
 [ -n "$TRACE" ] && TRACE="$(absdir "$TRACE")"
 
 pass=0; fail=0
@@ -32,7 +30,6 @@ for elf in "$@"; do
     fi
 
     extra=()
-    [ -n "$COVERAGE" ] && extra+=("+coverage=$COVERAGE/$name.dat")
     [ -n "$TRACE" ] && extra+=("+trace=$TRACE/$name.log")
     abs="$PWD/$elf"
     out="$(cd "$hex" && "$sim" "$abs" "${args[@]}" "${extra[@]}" 2>/dev/null)"

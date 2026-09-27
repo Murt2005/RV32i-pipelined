@@ -7,7 +7,6 @@
 // Simulation memory. With max_delay > 0 each request waits 0..max_delay extra
 // cycles, drawn from an LFSR, and ready drops while one is waiting
 
-// verilator coverage_off
 // This is a test model, not part of the design
 module memory32 #(
     parameter size = 4096                       // in bytes
@@ -127,6 +126,5 @@ module memory32 #(
 `endif
 
 endmodule
-// verilator coverage_on
 
 `endif

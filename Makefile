@@ -8,7 +8,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := test
 .PHONY: test rv32ui rv32um rv32mi cosim-test cosim-test-rv32ui cosim-test-rv32um cosim-test-rv32mi \
-        cosim-random cycle-check cycle-baseline latency-sweep dhrystone divider coverage spike lint format format-check help clean FORCE
+        cosim-random cycle-check cycle-baseline latency-sweep dhrystone divider spike lint format format-check help clean FORCE
 .SECONDARY:
 
 # Configuration for single-suite targets, dhrystone and cosim-random:
@@ -51,7 +51,6 @@ make latency-sweep            -                             every suite at memor
 make dhrystone                CONFIG=$(CONFIG) STALL_RATE=$(STALL_RATE)      Dhrystone on Icarus, in DMIPS/MHz
                               MEM_LATENCY=$(MEM_LATENCY)
 make divider                  -                             the divider testbench
-make coverage                 -                             Verilator coverage over every suite, per file
 make lint                     SV_FILES=(every .sv)          Verible lint, rules in .rules.verible_lint
 make format                   SV_FILES=(every .sv)          reformat in place with Verible, flags in .verible-format
 make format-check             SV_FILES=(every .sv)          list files that format would change
@@ -70,7 +69,6 @@ FORCE:
 # Simulators
 ICARUS_SIM := build/sim/itop
 COSIM        := build/cosim/Vcosim_top
-COV_SIM      := build/cov/Vtop
 DUMPHEX      := build/tools/dumphex
 RUN          := tools/run-tests.sh
 COSIM_RUN    := TRACE=build/trace $(RUN) $(COSIM)
@@ -81,11 +79,6 @@ RTL_SRC := $(wildcard rtl/*/*.sv sim/*.sv)
 $(ICARUS_SIM): $(RTL_SRC)
 	@mkdir -p $(@D) build/logs; echo "building $@"
 	@$(IVERILOG) -g2012 $(RTL_INC) -o $@ sim/itop.sv $(QUIET)
-
-$(COV_SIM): $(RTL_SRC) sim/verilator-top.cpp
-	@mkdir -p $(@D) build/logs; echo "building $@"
-	@$(VERILATOR) -O0 --cc --build --exe --top-module top --coverage -Wno-fatal \
-		--Mdir $(@D) $(RTL_INC) sim/top.sv sim/verilator-top.cpp -o Vtop $(QUIET)
 
 $(DUMPHEX): tools/dumphex.c
 	@mkdir -p $(@D) build/logs
@@ -245,18 +238,3 @@ build/rvgen/%.S: tools/rvgen.py FORCE
 
 cosim-random: $(DUMPHEX) $(COSIM) $(RVGEN_ELFS)
 	@$(COSIM_RUN) $(SIM_ARGS) $(RVGEN_ELFS)
-
-# Line, branch and toggle coverage over every suite in both configurations: plain, with stalls, and with slow memory
-define coverage-run
-@printf '%-8s ' $(1); COVERAGE=build/cov/dat/$(1) $(RUN) $(COV_SIM) +timeout=20000000 $(2) $(ALL_ELFS) \
-	> build/cov/$(1).log && tail -1 build/cov/$(1).log || { grep ^FAIL build/cov/$(1).log; exit 1; }
-endef
-
-coverage: $(DUMPHEX) $(COV_SIM) $(ALL_ELFS)
-	@rm -rf build/cov/dat build/cov/annotated
-	$(call coverage-run,plain,)
-	$(call coverage-run,stall,+stallrate=128)
-	$(call coverage-run,latency,+memlatency=4 +stallrate=128)
-	@verilator_coverage --write build/cov/merged.dat build/cov/dat/*/*.dat >/dev/null
-	@verilator_coverage --annotate build/cov/annotated --annotate-min 1 build/cov/merged.dat >/dev/null
-	@python3 tools/coverage-report.py build/cov/merged.dat
