@@ -138,6 +138,17 @@ word latched_instruction_pc;
 word issued_pc;
 bool issued_valid;
 
+// A response that arrived while frozen, held until the latched instruction has been re-presented
+// Dropping it instead livelocks against a memory that always takes two or more cycles
+bool    pending_valid;
+bool    pending_armed;
+word    pending_pc;
+instr32 pending_read;
+wire    pending_take = pending_valid & pending_armed;
+wire    pending_capture = instruction_memory_response.valid & ~fetch_control_signal_in.advance
+                        & ~(clear_fetch_stream & (instruction_memory_response.addr != clear_to_this_pc));
+wire [`word_size-1:0] pending_next_pc = (pending_capture ? instruction_memory_response.addr : pending_pc) + 4;
+
 // Front-end stall for an instruction memory that does not answer in one cycle
 logic instruction_fetch_outstanding;
 logic instruction_miss_q;
@@ -182,25 +193,23 @@ always @(*) begin
     instruction_memory_request = memory_io_no_req;
     instruction_memory_request.addr = fetch_pc;
     instruction_memory_request.do_read[3:0] = 4'b1111;
-    instruction_memory_request.valid = instruction_memory_response.ready && fetch_control_signal_in.advance;
+    instruction_memory_request.valid = instruction_memory_response.ready && fetch_control_signal_in.advance
+                                     && (!pending_valid || pending_take);
     instruction_memory_request.user_tag = 0;
 
-    // output whatever we have latched as default
-    fetched_instruction_out.pc = latched_instruction_pc;
-    fetched_instruction_out.is_instruction_valid = latched_instruction_valid;
-    fetched_instruction_out.instruction = latched_instruction_read;
-
-    if (instruction_memory_response.valid && fetch_control_signal_in.advance) begin
-        if (clear_fetch_stream && instruction_memory_response.addr != clear_to_this_pc) begin
-            // this response is from a request we're flushing, do not forward
-        end else begin
-            word memory_read;
-            memory_read = shuffle_store_data(instruction_memory_response.data, instruction_memory_response.addr);
-            fetched_instruction_out.is_instruction_valid = true;
-            fetched_instruction_out.pc = instruction_memory_response.addr;
-            fetched_instruction_out.instruction = memory_read[31:0];
-        end
-    end
+    // Picked once, not overridden: a default that flips during a freeze loops forever in Icarus with control's advance
+    // Nothing is in flight while a pending response waits, so it never competes with a real one
+    // Fields in order: is_instruction_valid, instruction, pc
+    if (pending_take)
+        fetched_instruction_out = {1'b1, pending_read, pending_pc};
+    else if (instruction_memory_response.valid && fetch_control_signal_in.advance
+             && !(clear_fetch_stream && instruction_memory_response.addr != clear_to_this_pc)) begin
+        word memory_read;
+        memory_read = shuffle_store_data(instruction_memory_response.data, instruction_memory_response.addr);
+        fetched_instruction_out = {1'b1, memory_read[31:0], instruction_memory_response.addr};
+    end else
+        // output whatever we have latched
+        fetched_instruction_out = {latched_instruction_valid, latched_instruction_read, latched_instruction_pc};
 end
 
 // update PC, latches, and clear state
@@ -212,6 +221,8 @@ always_ff @(posedge clk) begin
         clear_to_this_pc <= 0;
         issued_pc <= 0;
         issued_valid <= false;
+        pending_valid <= false;
+        pending_armed <= false;
         for (int i = 0; i < btb_entries; i++)
             btb_valid[i] <= 1'b0;
     end else begin
@@ -222,15 +233,31 @@ always_ff @(posedge clk) begin
             if (clear_fetch_stream && instruction_memory_response.addr != clear_to_this_pc) begin
                 // discard flushed instruction
             end else begin
+                word memory_read;
+                memory_read = shuffle_store_data(instruction_memory_response.data, instruction_memory_response.addr);
                 clear_fetch_stream <= false;
                 if (fetch_control_signal_in.advance) begin
-                    word memory_read;
-                    memory_read = shuffle_store_data(instruction_memory_response.data, instruction_memory_response.addr);
                     latched_instruction_pc <= instruction_memory_response.addr;
                     latched_instruction_read <= memory_read[31:0];
                     latched_instruction_valid <= true;
+                end else begin
+                    pending_valid <= true;
+                    pending_pc    <= instruction_memory_response.addr;
+                    pending_read  <= memory_read[31:0];
                 end
             end
+        end
+
+        // The cycle after a freeze lifts re-presents the latched instruction, the next one takes the pending one
+        pending_armed <= false;
+        if (fetch_control_signal_in.advance && pending_valid) begin
+            if (pending_take) begin
+                pending_valid <= false;
+                latched_instruction_pc <= pending_pc;
+                latched_instruction_read <= pending_read;
+                latched_instruction_valid <= true;
+            end else
+                pending_armed <= true;
         end
 
         if (instruction_memory_request.valid) begin
@@ -256,8 +283,15 @@ always_ff @(posedge clk) begin
             latched_instruction_valid <= false;
             clear_fetch_stream <= true;
             clear_to_this_pc <= branch_pc_redirect_request_in.pc;
+            pending_valid <= false;
+            pending_armed <= false;
         end else if (!fetch_control_signal_in.advance) begin
-            if (latched_instruction_valid) begin
+            if (pending_valid || pending_capture) begin
+                // Resume after the held instruction rather than fetching it again
+                fetch_pc <= pending_next_pc;
+                clear_fetch_stream <= true;
+                clear_to_this_pc <= pending_next_pc;
+            end else if (latched_instruction_valid) begin
                 fetch_pc <= latched_instruction_pc + 4;
                 clear_fetch_stream <= true;
                 clear_to_this_pc <= latched_instruction_pc + 4;
