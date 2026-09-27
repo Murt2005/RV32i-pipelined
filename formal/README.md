@@ -55,19 +55,41 @@ needs depth 56 before an iterative divide can retire.
 
 ## Status
 
-Last run on 2026-09-26, after the machine-mode CSR and trap changes:
+Last run on 2026-09-26 and 27, after the machine-mode CSR and trap changes:
 
 | Checks | Result |
 |---|---|
 | `insn_*` for RV32I (37) | all PASS, about 5 minutes each, 2h56m in total |
 | `causal` | PASS in 12 minutes |
 | `cover` | PASS in 11 minutes: both cover statements reached at step 30 |
-| `hang`, `ill`, `liveness`, `pc_bwd`, `pc_fwd`, `reg`, `unique` | not rerun yet |
-| `insn_*` for M (8) | not rerun yet |
+| `ill` | PASS in 4 minutes |
+| `pc_bwd` | PASS in 13 minutes |
+| `unique` | PASS in 16 minutes |
+| `hang` | FAIL in 9 minutes |
+| `liveness` | FAIL in 18 minutes |
+| `pc_fwd` | no result, stopped after 58 minutes |
+| `reg` | no result, stopped after 60 minutes |
+| `insn_*` for M (8) | not run on purpose |
 
-`liveness` has an open counterexample from an earlier run: with the external
-`stall` input asserted for one cycle while a `jal` is in fetch, the instruction
-stays latched and never retires.
+The M checks are left out: SMT solvers can't finish them in reasonable time,
+and multiply and divide results are already checked by `rv32um` and by random
+programs in lockstep with Spike.
+
+`hang` and `liveness` fail for two reasons, which aren't separated yet:
+
+- The wrapper bounds memory refusals and the external `stall` separately, and
+  the solver lines them up: it raises `ready` only in cycles where `stall` is
+  also high, so no fetch is accepted, and each of those resets the refusal
+  count. The core can then be kept from fetching indefinitely. The environment
+  needs one bound on blocked cycles covering both.
+- In the fetch stage, a response that arrives two cycles after its request
+  lands in the cycle `instruction_miss_q` freezes the front end, so it isn't
+  latched and the address is fetched again. The `liveness` counterexample
+  drops responses this way with no stall and `ready` high. If that holds, an
+  instruction memory with a fixed latency of two or more cycles would stop the
+  core making progress. It hasn't been confirmed in simulation yet.
+
+`pc_fwd` and `reg` need longer runs, ideally after the wrapper fix.
 
 Every check here is bounded model checking, so a PASS covers what the core can
 reach within the check's depth after reset (24 cycles for the RV32I

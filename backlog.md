@@ -4,13 +4,15 @@
 
 riscv-formal's `liveness_ch0` found that one stalled cycle with a `jal` in fetch leaves the instruction latched and never retiring: the core is busy rather than hung, so no watchdog catches it. The simulation's random stall injection and the formal wrapper both drive `stall`. Not fixed yet. The original note is in `cf35b72:fpga/de1soc/rv32_de1soc.sv`.
 
+The 2026-09-27 rerun points at the fetch stage: a response arriving two cycles after its request lands in the cycle `instruction_miss_q` freezes the front end, so it's dropped and refetched, even with no stall. Check it in simulation with an instruction memory that always takes two cycles. The formal wrapper also needs one bound on blocked cycles covering both `stall` and memory refusals, since the solver currently lines them up to block fetch indefinitely.
+
 ## fence.i doesn't invalidate the instruction cache
 
 `fence.i` decodes as a no-op, so code written through the data port and then run from SDRAM needs the MMIO invalidate register at `0x0002FFD0`. Making `fence.i` invalidate the I-cache and refetch would let riscv-tests' `fence_i` run from SDRAM, and cover the invalidate path, which nothing tests today.
 
 ## Rerun riscv-formal
 
-The 37 RV32I instruction checks, `causal` and `cover` passed on 2026-09-26, after the machine-mode CSR and trap changes. Still to rerun: `hang`, `ill`, `liveness`, `pc_bwd`, `pc_fwd`, `reg` and `unique` (the rest of `make -C formal run-consistency`), and the eight M checks (`make -C formal run-m`, which takes hours). `formal/README.md` has the full status.
+Rerun on 2026-09-26 and 27: the 37 RV32I instruction checks, `causal`, `cover`, `ill`, `pc_bwd` and `unique` pass, and `hang` and `liveness` fail. `pc_fwd` and `reg` were stopped after an hour with no result and still need a longer run. The M checks are left out on purpose. `formal/README.md` has the details.
 
 ## A C runtime for programs in SDRAM
 
