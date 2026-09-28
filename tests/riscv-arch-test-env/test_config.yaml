@@ -1,0 +1,8 @@
+# The tools are found on PATH, which make riscv-arch-test sets from site-config.sh
+name: rv32im-pipelined
+compiler_exe: riscv64-unknown-elf-gcc
+objdump_exe: riscv64-unknown-elf-objdump
+ref_model_exe: sail_riscv_sim
+udb_config: rv32im-pipelined.yaml
+linker_script: link.ld
+dut_include_dir: .

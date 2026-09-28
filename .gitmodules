@@ -7,3 +7,6 @@
 [submodule "sim/riscv-isa-sim"]
 	path = cosim/riscv-isa-sim
 	url = https://github.com/riscv-software-src/riscv-isa-sim
+[submodule "tests/riscv-arch-test"]
+	path = tests/riscv-arch-test
+	url = https://github.com/riscv-non-isa/riscv-arch-test

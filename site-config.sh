@@ -9,3 +9,6 @@ MARCH=rv32im_zicsr
 MABI=ilp32
 
 LDEMUL=elf32lriscv
+
+MISE=/Users/murat/.local/bin/mise
+SAIL=/Users/murat/.local/sail-riscv-0.14.1/bin/sail_riscv_sim

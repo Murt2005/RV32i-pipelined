@@ -24,6 +24,12 @@ Verilator and Python 3. Co-simulation also needs Spike, which `make spike` build
 from the `cosim/riscv-isa-sim` submodule (it needs `dtc`). The formal flow has its
 own requirements, listed in [`formal/README.md`](formal/README.md).
 
+`make riscv-arch-test` also needs [mise](https://mise.jdx.dev/) and the
+[Sail model](https://github.com/riscv/sail-riscv/releases/tag/0.14.1) 0.14.1
+(`sail_riscv_sim`), set in `site-config.sh`, and on macOS Homebrew's `z3`.
+mise installs the rest of the suite's framework (Ruby, uv and their packages)
+into `build/riscv-arch-test/tools`.
+
 ## Configurations
 
 Programs are built and run in one of two configurations, chosen with `CONFIG`:
@@ -93,6 +99,7 @@ This is the simulation top, `sim/top.sv`.
 |---|---|
 | `make` / `make test` | rv32ui (40), rv32um (8) and rv32mi (15) from [riscv-tests](https://github.com/riscv-software-src/riscv-tests), in the suite's stock `p` environment, in the core configuration and then the system configuration |
 | `make rv32ui`, `rv32um`, `rv32mi` | One suite, in `CONFIG` |
+| `make riscv-arch-test` | The 97 [riscv-arch-test](https://github.com/riscv-non-isa/riscv-arch-test) tests for RV32IM, Zicsr, Zicntr and machine mode, from SDRAM, `JOBS` at a time; builds the self-checking ELFs first, with results from the Sail model |
 | `make cosim-test` | Every riscv-test in both configurations in lockstep with [Spike](https://github.com/riscv-software-src/riscv-isa-sim), comparing every retired instruction |
 | `make cosim-test-rv32ui`, `-rv32um`, `-rv32mi` | One suite in lockstep with Spike, in `CONFIG` |
 | `make cosim-random ITERS=100 SEED=1` | Random RV32IM programs from `tools/rvgen.py`, in lockstep with Spike, in `CONFIG` |
@@ -117,6 +124,13 @@ be emulated; this core traps instead, which the spec also allows) and
 riscv-tests only need linker scripts from this repo: `tests/riscv-tests-env/link.ld`
 maps them onto IMEM/DMEM, and `link-system.ld` with the `boot.S` stub runs
 them from SDRAM.
+
+riscv-arch-test is configured by `tests/riscv-arch-test-env/`: what the core
+implements for the suite's framework (`rv32im-pipelined.yaml`), the matching Sail
+configuration (`sail.json`), how a test ends and prints (`rvmodel_macros.h`,
+through `tohost` and putchar), and `link.ld`, which places each test at the start
+of SDRAM, the one memory that holds both code and data. A two-instruction stub in
+IMEM jumps there. The ELFs land in `build/riscv-arch-test/rv32im-pipelined/elfs`.
 
 ## Known issues
 
@@ -144,7 +158,7 @@ them from SDRAM.
 | `rtl/mem/` | Memory interface |
 | `sim/` | Simulation top, memory model with optional random latency, Icarus and Verilator harnesses |
 | `cosim/` | Lockstep co-simulator against Spike, and Spike (submodule) |
-| `tests/` | riscv-tests (submodule), its linker script, cycle baseline, divider testbench |
+| `tests/` | riscv-tests and riscv-arch-test (submodules), their linker scripts and configuration, cycle baseline, divider testbench |
 | `formal/` | riscv-formal harness |
 | `bench/` | Dhrystone and the small C library it links against |
 | `tools/` | Random program generator, ELF-to-hex scripts, cycle-count reporter |

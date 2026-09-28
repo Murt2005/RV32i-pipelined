@@ -7,7 +7,7 @@ AR := $(RISCV_PREFIX)-ar
 SHELL := /bin/bash
 
 .DEFAULT_GOAL := test
-.PHONY: test rv32ui rv32um rv32mi cosim-test cosim-test-rv32ui cosim-test-rv32um cosim-test-rv32mi \
+.PHONY: test rv32ui rv32um rv32mi riscv-arch-test cosim-test cosim-test-rv32ui cosim-test-rv32um cosim-test-rv32mi \
         cosim-random cycle-check cycle-baseline latency-sweep dhrystone divider spike help clean FORCE
 .SECONDARY:
 
@@ -24,6 +24,10 @@ MEM_LATENCY ?= 0
 SIM_TIMEOUT ?= 120000
 SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_TIMEOUT)
 
+# Tests run at a time by tools/run-tests.sh
+JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
+export JOBS
+
 # Random programs for cosim-random
 ITERS  ?= 50
 SEED   ?= 1
@@ -37,8 +41,11 @@ command                       options (default)             what it does
 make [test]                   STALL_RATE=$(STALL_RATE)                  every riscv-test suite in both configurations, on Icarus
                               MEM_LATENCY=$(MEM_LATENCY)
                               SIM_TIMEOUT=$(SIM_TIMEOUT)
+                              JOBS=$(JOBS)                       tests at a time, for every target that runs tests
 make rv32ui|rv32um|rv32mi     CONFIG=$(CONFIG)                   one suite, on Icarus
                               + the options of test
+make riscv-arch-test          SIM_TIMEOUT=$(ACT_TIMEOUT)           every riscv-arch-test from SDRAM, on Icarus,
+                              JOBS=$(JOBS)                       building the ELFs first; needs mise and Sail
 make cosim-test               the options of test           every suite in both configurations, checked against Spike
 make cosim-test-rv32ui|um|mi  CONFIG=$(CONFIG)                   one suite, checked against Spike
                               + the options of test
@@ -51,7 +58,7 @@ make latency-sweep            -                             every suite at memor
 make dhrystone                CONFIG=$(CONFIG) STALL_RATE=$(STALL_RATE)      Dhrystone on Icarus, in DMIPS/MHz
                               MEM_LATENCY=$(MEM_LATENCY)
 make divider                  -                             the divider testbench
-make clean                    -                             delete build/, including Spike
+make clean                    -                             delete build/, including Spike and the riscv-arch-test tools
 endef
 
 help:
@@ -113,6 +120,15 @@ test: $(DUMPHEX) $(ICARUS_SIM) $(ALL_ELFS)
 $(foreach s,$(SUITES),$(eval $(s) cosim-test-$(s): $(call elfs,$(CONFIG),$(s))))
 $(SUITES): $(DUMPHEX) $(ICARUS_SIM)
 	@$(RUN) $(ICARUS_SIM) $(SIM_ARGS) $(call elfs,$(CONFIG),$@)
+
+# riscv-arch-test, from SDRAM since a test keeps code and data in one image; the
+# framework rebuilds ELFs only when the config or the submodule changes
+ACT_ELF_DIR := build/riscv-arch-test/rv32im-pipelined/elfs
+ACT_TIMEOUT := $(if $(filter command line,$(origin SIM_TIMEOUT)),$(SIM_TIMEOUT),1000000)
+
+riscv-arch-test: $(DUMPHEX) $(ICARUS_SIM)
+	@tools/build-arch-tests.sh
+	@$(RUN) $(ICARUS_SIM) +timeout=$(ACT_TIMEOUT) $$(find $(ACT_ELF_DIR) -name '*.elf' | sort)
 
 # Cycle counts per test against tests/cycles/<config>.json; any difference means timing changed
 define cycle-run
