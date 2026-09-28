@@ -125,9 +125,6 @@ them from SDRAM.
   loaded two instructions earlier through the data cache, and which computed as
   if dividing by 0. Reproduce with `make cosim-random CONFIG=system SEED=1039 ITERS=1`.
 
-- **Liveness under external stall.** riscv-formal found a case where a
-  one-cycle `stall` with a `jal` in fetch leaves the instruction latched and
-  never retiring. The simulation's random stall injection drives the same input.
 - **`fence.i` doesn't invalidate the instruction cache**, so self-modifying code
   needs the MMIO invalidate register, and the riscv-tests `fence_i` test is
   excluded.

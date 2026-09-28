@@ -34,9 +34,9 @@ cd formal && sby -f smoke.sby      # expect FAIL with a counterexample trace
 | `pc_fwd` / `pc_bwd` | consecutive instructions' PCs chain correctly: none skipped, none run twice |
 | `causal` | an instruction never depends on a value produced after it |
 | `unique` | `rvfi_order` is strictly increasing, so nothing retires twice |
-| `liveness` | the core always eventually retires an instruction |
+| `liveness` | after a retirement, the next one comes within 22 cycles, with no divides |
 | `ill` | an all-zero instruction traps and writes neither a register nor memory |
-| `hang` | at least one instruction retires within 30 cycles of reset |
+| `hang` | at least one instruction retires within 30 cycles of reset, with no divides |
 | `cover` | two retirements and one trap are reachable, so the other checks aren't passing vacuously |
 
 ```bash
@@ -55,41 +55,42 @@ needs depth 56 before an iterative divide can retire.
 
 ## Status
 
-Last run on 2026-09-26 and 27, after the machine-mode CSR and trap changes:
+`hang` and `liveness` were rerun on 2026-09-27 after the fetch and decode
+changes below. Everything else was last run on 2026-09-26 and 27, before them,
+and needs rerunning:
 
 | Checks | Result |
 |---|---|
-| `insn_*` for RV32I (37) | all PASS, about 5 minutes each, 2h56m in total |
-| `causal` | PASS in 12 minutes |
-| `cover` | PASS in 11 minutes: both cover statements reached at step 30 |
-| `ill` | PASS in 4 minutes |
-| `pc_bwd` | PASS in 13 minutes |
-| `unique` | PASS in 16 minutes |
-| `hang` | FAIL in 9 minutes |
-| `liveness` | FAIL in 18 minutes |
-| `pc_fwd` | no result, stopped after 58 minutes |
-| `reg` | no result, stopped after 60 minutes |
+| `hang` | PASS in 20 minutes |
+| `liveness` | PASS in 17 minutes |
+| `insn_*` for RV32I (37) | all PASS before the changes, about 5 minutes each |
+| `causal`, `cover`, `ill`, `pc_bwd`, `unique` | PASS before the changes |
+| `pc_fwd` | no result before the changes, stopped after 58 minutes |
+| `reg` | no result before the changes, stopped after 60 minutes |
 | `insn_*` for M (8) | not run on purpose |
 
 The M checks are left out: SMT solvers can't finish them in reasonable time,
 and multiply and divide results are already checked by `rv32um` and by random
 programs in lockstep with Spike.
 
-`hang` and `liveness` fail for two reasons, which aren't separated yet:
+`hang` and `liveness` used to fail, and fixing them took three changes:
 
-- The wrapper bounds memory refusals and the external `stall` separately, and
-  the solver lines them up: it raises `ready` only in cycles where `stall` is
-  also high, so no fetch is accepted, and each of those resets the refusal
-  count. The core can then be kept from fetching indefinitely. The environment
-  needs one bound on blocked cycles covering both.
-- In the fetch stage, a response that arrives two cycles after its request
-  lands in the cycle `instruction_miss_q` freezes the front end, so it isn't
-  latched and the address is fetched again. The `liveness` counterexample
-  drops responses this way with no stall and `ready` high. If that holds, an
-  instruction memory with a fixed latency of two or more cycles would stop the
-  core making progress. It hasn't been confirmed in simulation yet.
+- The wrapper bounded memory refusals and the external `stall` separately, so
+  the solver could line them up and keep every fetch out. They now share one
+  budget.
+- Fetch dropped a response that arrived while the front end was frozen and
+  fetched it again, so an instruction memory that always takes two or more
+  cycles livelocked the core. Such a response is now held until the freeze
+  lifts.
+- Decode turned its instruction into a bubble on every freeze and fetch
+  re-presented it afterwards, so an instruction needed two unfrozen cycles in
+  a row to reach execute, and stalls on alternate cycles starved the core.
+  Decode now holds its instruction through a freeze, rereading its operands
+  each cycle.
 
-`pc_fwd` and `reg` need longer runs, ideally after the wrapper fix.
+Both checks run on a build that never fetches DIV or REM, since an iterative
+divide takes longer than their depth of 30 cycles. The divider always finishes
+after 32 iterations, and `make divider` tests it on its own.
 
 Every check here is bounded model checking, so a PASS covers what the core can
 reach within the check's depth after reset (24 cycles for the RV32I
@@ -101,7 +102,9 @@ instructions), not every state.
 `sv2v` over `wrapper.sv` + `cpu.sv` first and points riscv-formal at the
 flattened result. `genchecks.py` expects a `<basedir>/cores/<core>/` layout, so
 the Makefile builds one in `formal/rf/` out of symlinks into the riscv-formal
-submodule.
+submodule. A second flattened build, `rvfi_top_nodiv.v`, adds the wrapper's
+no-divide assumption (`WRAPPER_NO_DIVIDE`, kept through sv2v with
+`--exclude=Assert`), and the Makefile points `hang` and `liveness` at it.
 
 The RVFI port lives in `cpu.sv` behind `` `ifdef RVFI ``, so the synthesised
 build carries none of it. `make cosim-test` validates it independently by

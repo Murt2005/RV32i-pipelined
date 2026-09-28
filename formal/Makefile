@@ -22,15 +22,23 @@ $(ROOT)/build/formal/rvfi_top.v: wrapper.sv $(wildcard $(RTL)/core/*.sv) \
 	mkdir -p $(ROOT)/build/formal
 	sv2v $(SV2V_DEFS) $(SV2V_INC) --write=$@ wrapper.sv $(RTL)/core/cpu.sv
 
+# hang and liveness use a build with no divides: one outlasts their depth, and the divider always finishes
+$(ROOT)/build/formal/rvfi_top_nodiv.v: wrapper.sv $(wildcard $(RTL)/core/*.sv) \
+                                       $(RTL)/mem/memory-io.sv
+	mkdir -p $(ROOT)/build/formal
+	sv2v $(SV2V_DEFS) -DWRAPPER_NO_DIVIDE --exclude=Assert $(SV2V_INC) --write=$@ wrapper.sv $(RTL)/core/cpu.sv
+
 riscv-formal/insns/isa_rv32i.txt:
 	cd riscv-formal/insns && python3 generate.py
 
-checks: $(ROOT)/build/formal/rvfi_top.v riscv-formal/insns/isa_rv32i.txt
+checks: $(ROOT)/build/formal/rvfi_top.v $(ROOT)/build/formal/rvfi_top_nodiv.v riscv-formal/insns/isa_rv32i.txt
 	mkdir -p $(CHECKDIR)
 	ln -sfn ../riscv-formal/insns  $(BASEDIR)/insns
 	ln -sfn ../riscv-formal/checks $(BASEDIR)/checks
 	cp checks.cfg $(CHECKDIR)/
 	cd $(CHECKDIR) && python3 ../../checks/genchecks.py
+	sed -i.bak 's/rvfi_top\.v/rvfi_top_nodiv.v/g' $(CHECKDIR)/checks/hang.sby $(CHECKDIR)/checks/liveness_ch0.sby
+	rm -f $(CHECKDIR)/checks/*.sby.bak
 	@echo "generated `ls $(CHECKDIR)/checks/*.sby | wc -l | tr -d ' '` checks"
 
 list: checks

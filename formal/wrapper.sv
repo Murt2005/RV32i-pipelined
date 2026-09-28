@@ -88,6 +88,12 @@ module rvfi_wrapper (
     `MEM_TARGET(imem, inst_req, inst_rsp, imem_rdata, inst_rand_ready, inst_rand_delay)
     `MEM_TARGET(dmem, data_req, data_rsp, dmem_rdata, data_rand_ready, data_rand_delay)
 
+`ifdef WRAPPER_NO_DIVIDE
+    // hang and liveness only: no DIV/REM, which takes longer than their depth
+    always @* if (!reset && imem_rsp_valid)
+        assume(!(imem_rdata[6:0] == 7'b0110011 && imem_rdata[31:25] == 7'b0000001 && imem_rdata[14]));
+`endif
+
     wire hostile = core_stall | (~imem_busy & ~imem_ready) | (~dmem_busy & ~dmem_ready);
 
     always @(posedge clock) begin
