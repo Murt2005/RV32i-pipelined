@@ -397,7 +397,9 @@ module execute(
     output btb_update_t                         btb_update_out,
 
     input logic                                 data_memory_wait,
-    output logic                                div_wait
+    output logic                                div_wait,
+
+    input logic                                 [63:0] mtime
 );
 
 import riscv::*;
@@ -544,6 +546,8 @@ always_comb begin
         csr_mcycleh,  csr_cycleh:   csr_read = mcycle_r[63:32];
         csr_minstret, csr_instret:  csr_read = minstret_r[31:0];
         csr_minstreth, csr_instreth: csr_read = minstret_r[63:32];
+        csr_time:     csr_read = mtime[31:0];
+        csr_timeh:    csr_read = mtime[63:32];
         // No interrupts, IDs or debug triggers; these exist but always read as zero
         csr_mie, csr_mip, csr_mstatush,
         csr_mvendorid, csr_marchid, csr_mimpid, csr_mhartid, csr_mconfigptr,
@@ -1025,7 +1029,9 @@ module core #(
 
     output memory_io_req                        data_mem_req,
     input memory_io_rsp                         data_mem_rsp,
-    output riscv::word                          data_mem_addr
+    output riscv::word                          data_mem_addr,
+
+    input logic                                 [63:0] mtime
 );
 
 import riscv::*;
@@ -1100,7 +1106,8 @@ execute execute_m(
     .pc_control_out(pc_control),
     .btb_update_out(btb_update),
     .data_memory_wait(data_memory_wait),
-    .div_wait(div_wait)
+    .div_wait(div_wait),
+    .mtime(mtime)
 `ifdef RVFI
     ,.rvfi_ex_valid(rvfi_ex_valid)
     ,.rvfi_ex_insn(rvfi_ex_insn)

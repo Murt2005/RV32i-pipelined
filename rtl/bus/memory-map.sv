@@ -22,6 +22,8 @@
 `define MMIO_PUTCHAR    32'h0002_FFF8
 `define MMIO_HALT       32'h0002_FFFC
 `define MMIO_ICACHE_INV 32'h0002_FFD0
+`define MMIO_MTIME      32'h0002_FFE0
+`define MMIO_MTIMEH     32'h0002_FFE4
 
 function automatic logic [`BUS_SEL_W-1:0] bus_decode(logic [31:0] addr);
     if (addr[31:28] == 4'h8)

@@ -79,6 +79,9 @@ module rvfi_wrapper (
     // External stall from the solver
     (* keep *) `rvformal_rand_reg stall_rand;
 
+    // time CSR reads may return anything
+    (* keep *) `rvformal_rand_reg [63:0] mtime;
+
     // One budget for stalls and refusals together: bounded separately, the solver lines them up and never lets a fetch in
     // After two hostile cycles in a row, the next has no stall and both memories ready unless busy
     logic [1:0] hostile_run;
@@ -115,6 +118,7 @@ module rvfi_wrapper (
         .data_mem_req(data_req),
         .data_mem_rsp(data_rsp),
         .retired(),
+        .mtime(mtime),
 
         .rvfi_valid(rvfi_valid),
         .rvfi_order(rvfi_order),

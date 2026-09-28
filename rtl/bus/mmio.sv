@@ -23,7 +23,9 @@ module mmio(
     output logic        tohost_valid,
     output logic [31:0] tohost_data,
 
-    output logic        icache_invalidate
+    output logic        icache_invalidate,
+
+    output logic [63:0] mtime
 );
 
 wire selected = req.valid & (is_any_byte(req.do_read) | is_any_byte(req.do_write));
@@ -37,6 +39,8 @@ always_comb begin
     case (req.addr)
         `MMIO_CYCLES:  rd_value = perf_cycles;
         `MMIO_RETIRED: rd_value = perf_retired;
+        `MMIO_MTIME:   rd_value = mtime[31:0];
+        `MMIO_MTIMEH:  rd_value = mtime[63:32];
         default:       rd_value = 32'd0;
     endcase
 end
@@ -47,6 +51,17 @@ always_comb begin
     tohost_valid      = is_write & (req.addr == `MMIO_TOHOST);
     tohost_data       = req.data;
     icache_invalidate = is_write & (req.addr == `MMIO_ICACHE_INV);
+end
+
+always_ff @(posedge clk) begin
+    if (reset)
+        mtime <= 64'd0;
+    else if (is_write && req.addr == `MMIO_MTIME)
+        mtime <= {mtime[63:32], req.data};
+    else if (is_write && req.addr == `MMIO_MTIMEH)
+        mtime <= {req.data, mtime[31:0]};
+    else
+        mtime <= mtime + 64'd1;
 end
 
 always_ff @(posedge clk) begin

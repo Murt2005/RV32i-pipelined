@@ -245,10 +245,12 @@ localparam [11:0] csr_minstret  = 12'hB02;
 localparam [11:0] csr_mcycleh   = 12'hB80;
 localparam [11:0] csr_minstreth = 12'hB82;
 
-// Read-only copies of the counters and ID registers; all read zero
+// Read-only copies of the counters, and the ID registers, which read zero
 localparam [11:0] csr_cycle      = 12'hC00;
+localparam [11:0] csr_time       = 12'hC01;
 localparam [11:0] csr_instret    = 12'hC02;
 localparam [11:0] csr_cycleh     = 12'hC80;
+localparam [11:0] csr_timeh      = 12'hC81;
 localparam [11:0] csr_instreth   = 12'hC82;
 localparam [11:0] csr_mvendorid  = 12'hF11;
 localparam [11:0] csr_marchid    = 12'hF12;

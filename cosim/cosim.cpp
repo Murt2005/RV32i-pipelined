@@ -91,14 +91,16 @@ static uint32_t plusarg(const char* name, uint32_t fallback) {
     return eq ? (uint32_t)std::strtoul(eq + 1, nullptr, 0) : fallback;
 }
 
-// Values the two are free to disagree on: cycle counts (as CSRs or MMIO words) and
+// Values the two are free to disagree on: cycle counts and time (as CSRs or MMIO words) and
 // the ID registers, whose values each implementation chooses
 static bool is_impl_defined_read(uint32_t insn, uint32_t mem_addr, uint32_t rmask) {
     uint32_t opcode = insn & 0x7f, funct3 = (insn >> 12) & 7, csr = insn >> 20;
     if (opcode == 0x73 && funct3 != 0)
         return csr == 0xB00 || csr == 0xB80 || csr == 0xC00 || csr == 0xC80 ||
+               csr == 0xC01 || csr == 0xC81 ||
                (csr >= 0xF11 && csr <= 0xF13);
-    return opcode == 0x03 && rmask && (mem_addr == 0x0002FFF0 || mem_addr == 0x0002FFF4);
+    return opcode == 0x03 && rmask && (mem_addr == 0x0002FFF0 || mem_addr == 0x0002FFF4 ||
+                                       mem_addr == 0x0002FFE0 || mem_addr == 0x0002FFE4);
 }
 
 int main(int argc, char** argv) {

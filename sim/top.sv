@@ -30,6 +30,7 @@ assign cpu_stall = (stall_lfsr[7:0] < stall_rate);
 
 
 logic retired;
+logic [63:0] mtime;
 
 logic [31:0] perf_cycles;
 logic [31:0] perf_retired;
@@ -54,6 +55,7 @@ core the_core(
 	,.data_mem_rsp(data_mem_rsp)
 	,.inst_mem_addr(inst_mem_addr)
 	,.data_mem_addr(data_mem_addr)
+	,.mtime(mtime)
 );
 
 always @(posedge clk) begin
@@ -187,7 +189,8 @@ mmio mmio_m(
     .putchar_valid(putchar_valid), .putchar_data(putchar_data),
     .halt_pulse(halt_pulse),
     .tohost_valid(tohost_valid), .tohost_data(tohost_data),
-    .icache_invalidate(icache_invalidate)
+    .icache_invalidate(icache_invalidate),
+    .mtime(mtime)
 );
 
 always @(posedge clk) if (putchar_valid) $write("%c", putchar_data);

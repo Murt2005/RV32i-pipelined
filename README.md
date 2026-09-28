@@ -63,7 +63,7 @@ faulting instruction never reaches writeback.
 | CSRs | |
 |---|---|
 | Read/write | `mstatus` (MIE, MPIE), `mtvec` (direct mode), `mscratch`, `mepc`, `mcause`, `mtval`, `mcycle[h]`, `minstret[h]` |
-| Read-only | `misa`, `cycle[h]`, `instret[h]`, and the ID registers, which read zero |
+| Read-only | `misa`, `cycle[h]`, `time[h]`, `instret[h]`, and the ID registers, which read zero |
 | Always zero | `mie`, `mip`, `mstatush`, `tselect`, `tdata1`, `tdata2` (no interrupts, no debug triggers) |
 
 Accessing any other CSR, or writing a read-only one, is an illegal instruction.
@@ -84,7 +84,7 @@ This is the simulation top, `sim/top.sv`.
 |---|---|
 | `0x0001_0000` | Instruction memory, 64 KiB; the reset PC |
 | `0x0002_0000` | Data memory, 64 KiB, minus the MMIO block |
-| `0x0002_FFC0` | MMIO: `tohost` (`FFC0`), I-cache invalidate (`FFD0`), cycles (`FFF0`), instructions retired (`FFF4`), putchar (`FFF8`), halt (`FFFC`) |
+| `0x0002_FFC0` | MMIO: `tohost` (`FFC0`), I-cache invalidate (`FFD0`), `mtime` (`FFE0`, high half at `FFE4`, one tick per clock), cycles (`FFF0`), instructions retired (`FFF4`), putchar (`FFF8`), halt (`FFFC`) |
 | `0x8000_0000` | SDRAM model, behind 16 KiB instruction and data caches |
 
 ## Verification
