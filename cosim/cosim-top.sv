@@ -8,6 +8,7 @@ module cosim_top(
     input  logic        reset,
     input  logic [7:0]  stall_rate,
     input  logic [7:0]  mem_delay,
+    input  logic        mem_fixed,
     output logic        halt,
 
     output logic        rvfi_valid,
@@ -28,6 +29,7 @@ top the_top(
     .reset(reset),
     .stall_rate(stall_rate),
     .mem_delay(mem_delay),
+    .mem_fixed(mem_fixed),
     .halt(halt)
 );
 

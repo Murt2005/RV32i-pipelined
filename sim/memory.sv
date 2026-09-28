@@ -5,7 +5,8 @@
 `include "memory-io.sv"
 
 // Simulation memory. With max_delay > 0 each request waits 0..max_delay extra
-// cycles, drawn from an LFSR, and ready drops while one is waiting
+// cycles, drawn from an LFSR, or exactly max_delay with fixed_delay set, and
+// ready drops while one is waiting
 
 // This is a test model, not part of the design
 module memory32 #(
@@ -20,6 +21,7 @@ module memory32 #(
     input   clk
     ,input  reset
     ,input  [7:0] max_delay
+    ,input  fixed_delay
 
     ,input memory_io_req32  req
     ,output memory_io_rsp32 rsp
@@ -60,7 +62,7 @@ module memory32 #(
     wire can_accept = passthrough ? 1'b1 : (~holding & ~reset);
     wire accept_now = req.valid & can_accept;
 
-    wire [7:0] this_delay = passthrough ? 8'd0 : (lfsr[7:0] % (max_delay + 8'd1));
+    wire [7:0] this_delay = passthrough ? 8'd0 : fixed_delay ? max_delay : (lfsr[7:0] % (max_delay + 8'd1));
 
     always_comb begin
         mem_req       = holding ? pending : req;

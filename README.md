@@ -96,7 +96,7 @@ This is the simulation top, `sim/top.sv`.
 | `make cosim-test` | Every riscv-test in both configurations in lockstep with [Spike](https://github.com/riscv-software-src/riscv-isa-sim), comparing every retired instruction |
 | `make cosim-test-rv32ui`, `-rv32um`, `-rv32mi` | One suite in lockstep with Spike, in `CONFIG` |
 | `make cosim-random ITERS=100 SEED=1` | Random RV32IM programs from `tools/rvgen.py`, in lockstep with Spike, in `CONFIG` |
-| `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, and with random stalls |
+| `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, with random stalls, and with memories that always take the full latency |
 | `make cycle-check` | Cycle counts against the checked-in baselines for both configurations, to catch timing changes |
 | `make divider` | The divider on its own: every spec corner case plus random operands |
 | `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |

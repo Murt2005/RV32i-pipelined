@@ -47,7 +47,7 @@ make cosim-random             CONFIG=$(CONFIG) ITERS=$(ITERS)          random pr
                               + the options of test
 make cycle-check              -                             cycle counts per test against tests/cycles/
 make cycle-baseline           -                             record those cycle counts, overwriting them
-make latency-sweep            -                             every suite at memory latency 1 to 16, then with stalls
+make latency-sweep            -                             every suite at memory latency 1 to 16, then with stalls and fixed latency
 make dhrystone                CONFIG=$(CONFIG) STALL_RATE=$(STALL_RATE)      Dhrystone on Icarus, in DMIPS/MHz
                               MEM_LATENCY=$(MEM_LATENCY)
 make divider                  -                             the divider testbench
@@ -127,13 +127,16 @@ cycle-baseline cycle-check: $(DUMPHEX) $(ICARUS_SIM) $(ALL_ELFS)
 	$(call cycle-run,core)
 	$(call cycle-run,system)
 
-# Every suite against slow memory, then with stalls too; each run is latency:stall rate:watchdog
-SWEEP := 1:0:300000 2:0:450000 4:0:750000 8:0:1350000 16:0:2550000 8:128:4000000
+# Every suite against slow memory, then with stalls too; each run is latency:stall rate:watchdog[:fixed]
+# fixed makes every access wait the full latency, which random delays never do for long
+SWEEP := 1:0:300000 2:0:450000 4:0:750000 8:0:1350000 16:0:2550000 8:128:4000000 \
+         2:0:1500000:fixed 4:0:2500000:fixed 4:64:4000000:fixed
 
 latency-sweep: $(DUMPHEX) $(ICARUS_SIM) $(ALL_ELFS)
 	@rc=0; for r in $(SWEEP); do set -- $${r//:/ }; \
-		log=build/sweep-$$1-$$2.log; printf 'MEM_LATENCY=%-3s STALL_RATE=%-4s ' $$1 $$2; \
-		$(RUN) $(ICARUS_SIM) +memlatency=$$1 +stallrate=$$2 +timeout=$$3 $(ALL_ELFS) > $$log \
+		fixed=$$([ "$$4" = fixed ] && echo 1 || echo 0); \
+		log=build/sweep-$$1-$$2$${4:+-$$4}.log; printf 'MEM_LATENCY=%-3s STALL_RATE=%-4s %-6s' $$1 $$2 "$$4"; \
+		$(RUN) $(ICARUS_SIM) +memlatency=$$1 +memfixed=$$fixed +stallrate=$$2 +timeout=$$3 $(ALL_ELFS) > $$log \
 			&& echo ok || { echo "FAILED, see $$log"; rc=1; }; \
 	done; exit $$rc
 

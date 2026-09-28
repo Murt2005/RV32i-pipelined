@@ -11,6 +11,7 @@ logic reset = 1;
 logic halt;
 logic [7:0] stall_rate = 8'd0;
 logic [7:0] mem_delay = 8'd0;
+logic mem_fixed = 1'b0;
 
 integer max_cycles;
 integer cycles = 0;
@@ -20,6 +21,7 @@ top the_top(
     ,.reset(reset)
     ,.stall_rate(stall_rate)
     ,.mem_delay(mem_delay)
+    ,.mem_fixed(mem_fixed)
     ,.halt(halt));
 
 always #5 clk = ~clk;
@@ -38,6 +40,10 @@ initial begin
 
     if (!$value$plusargs("memlatency=%d", mem_delay))
         mem_delay = 8'd0;
+
+    // +memfixed=1: every access waits exactly memlatency cycles instead of a random 0..memlatency
+    if (!$value$plusargs("memfixed=%d", mem_fixed))
+        mem_fixed = 1'b0;
 
     reset = 1;
     #16 reset = 0;

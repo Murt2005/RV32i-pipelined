@@ -125,6 +125,7 @@ int main(int argc, char** argv) {
 
     Vcosim_top top;
     top.mem_delay = plusarg("memlatency=", 0);
+    top.mem_fixed = plusarg("memfixed=", 0);
     top.stall_rate = plusarg("stallrate=", 0);
     uint32_t timeout = plusarg("timeout=", 2000000);
 

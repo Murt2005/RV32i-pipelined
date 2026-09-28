@@ -11,6 +11,7 @@
 module top #(
     parameter sdram_bytes = 32'h0010_0000
 ) (input clk, input reset, input [7:0] stall_rate, input [7:0] mem_delay,
+   input mem_fixed,
    output logic halt
    );
 
@@ -107,6 +108,7 @@ memory32 #(
     .clk(clk)
     ,.reset(reset)
     ,.max_delay(mem_delay)
+    ,.fixed_delay(mem_fixed)
     ,.req(i_imem_req)
     ,.rsp(i_imem_rsp)
     );
@@ -123,6 +125,7 @@ memory32 #(
     .clk(clk)
     ,.reset(reset)
     ,.max_delay(mem_delay)
+    ,.fixed_delay(mem_fixed)
     ,.req(d_dmem_req)
     ,.rsp(d_dmem_rsp)
     );
@@ -166,6 +169,7 @@ memory32 #(
     .clk(clk)
     ,.reset(reset)
     ,.max_delay(mem_delay)
+    ,.fixed_delay(mem_fixed)
     ,.req(sdram_req)
     ,.rsp(sdram_rsp)
     );
