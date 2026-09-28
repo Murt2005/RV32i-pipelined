@@ -105,7 +105,6 @@ This is the simulation top, `sim/top.sv`.
 | `make cosim-random ITERS=100 SEED=1` | Random RV32IM programs from `tools/rvgen.py`, in lockstep with Spike, in `CONFIG` |
 | `make latency-sweep` | Every suite again against memories that answer up to 16 cycles late, with random stalls, and with memories that always take the full latency |
 | `make cycle-check` | Cycle counts against the checked-in baselines for both configurations, to catch timing changes |
-| `make divider` | The divider on its own: every spec corner case plus random operands |
 | `make -C formal run-insn` | riscv-formal instruction checks (see [`formal/README.md`](formal/README.md)) |
 
 `make test` and the single suites run on Icarus; the `cosim-*` targets run the
@@ -158,7 +157,7 @@ IMEM jumps there. The ELFs land in `build/riscv-arch-test/rv32im-pipelined/elfs`
 | `rtl/mem/` | Memory interface |
 | `sim/` | Simulation top, memory model with optional random latency, Icarus and Verilator harnesses |
 | `cosim/` | Lockstep co-simulator against Spike, and Spike (submodule) |
-| `tests/` | riscv-tests and riscv-arch-test (submodules), their linker scripts and configuration, cycle baseline, divider testbench |
+| `tests/` | riscv-tests and riscv-arch-test (submodules), their linker scripts and configuration, cycle baseline |
 | `formal/` | riscv-formal harness |
 | `bench/` | Dhrystone and the small C library it links against |
 | `tools/` | Random program generator, ELF-to-hex scripts, cycle-count reporter |

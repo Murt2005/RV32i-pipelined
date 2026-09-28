@@ -8,7 +8,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := test
 .PHONY: test rv32ui rv32um rv32mi riscv-arch-test cosim-test cosim-test-rv32ui cosim-test-rv32um cosim-test-rv32mi \
-        cosim-random cycle-check cycle-baseline latency-sweep dhrystone divider spike help clean FORCE
+        cosim-random cycle-check cycle-baseline latency-sweep dhrystone spike help clean FORCE
 .SECONDARY:
 
 # Configuration for single-suite targets, dhrystone and cosim-random:
@@ -57,7 +57,6 @@ make cycle-baseline           -                             record those cycle c
 make latency-sweep            -                             every suite at memory latency 1 to 16, then with stalls and fixed latency
 make dhrystone                CONFIG=$(CONFIG) STALL_RATE=$(STALL_RATE)      Dhrystone on Icarus, in DMIPS/MHz
                               MEM_LATENCY=$(MEM_LATENCY)
-make divider                  -                             the divider testbench
 make clean                    -                             delete build/, including Spike and the riscv-arch-test tools
 endef
 
@@ -201,13 +200,6 @@ dhrystone: $(DHRY)/dhrystone.elf $(DUMPHEX) $(ICARUS_SIM)
 	awk -F= '/^CYCLES=/ { c = $$2 } /^RUNS=/ { r = $$2 } \
 		END { if (!r) { print "dhrystone did not finish"; exit 1 } \
 		      printf "$(CONFIG): %d runs, %d cycles per run, %.3f DMIPS/MHz\n", r, c / r, 1e6 / (c / r) / 1757 }'
-
-build/sim/tb-divider: tests/tb-divider.sv rtl/core/divider.sv rtl/core/system.sv
-	@mkdir -p $(@D) build/logs
-	@$(IVERILOG) -g2012 -Irtl/core -o $@ $< $(QUIET)
-
-divider: build/sim/tb-divider
-	@$<
 
 # Spike, built from the cosim/riscv-isa-sim submodule into build/spike
 SPIKE := $(CURDIR)/build/spike

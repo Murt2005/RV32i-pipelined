@@ -90,7 +90,7 @@ programs in lockstep with Spike.
 
 Both checks run on a build that never fetches DIV or REM, since an iterative
 divide takes longer than their depth of 30 cycles. The divider always finishes
-after 32 iterations, and `make divider` tests it on its own.
+after 32 iterations.
 
 Every check here is bounded model checking, so a PASS covers what the core can
 reach within the check's depth after reset (24 cycles for the RV32I
