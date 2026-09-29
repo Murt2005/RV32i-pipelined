@@ -13,7 +13,7 @@
 
 </div>
 
-murtCPU is a RV32IM_Zicsr_Zicntr RISC-V processor built from scratch as a learning experience in SystemVerilog. Architecturaly murtCPU is a 5-stage pipeline capable of running compiled C and is compliant with the official RISC-V spec. murtCPU features a small SoC around it including I/D memories, MMIO, and SDRAM behind 16 KiB I/D caches. murtCPU is benchmarked using CoreMark at 2.96 and 2.67 CoreMark/MHz on the Core and System configurations.
+murtCPU is a RV32IM_Zicsr_Zicntr RISC-V processor built from scratch as a learning experience in SystemVerilog. Architecturaly murtCPU is a five-stage pipeline capable of running compiled C and is compliant with the official RISC-V spec. murtCPU features a small SoC around it with I/D memories, MMIO, and SDRAM behind 16 KiB I/D caches. murtCPU is benchmarked using CoreMark at 2.96 and 2.67 CoreMark/MHz on the core and system configs.
 
 ## Getting started
 
