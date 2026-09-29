@@ -10,3 +10,6 @@
 [submodule "tests/riscv-arch-test"]
 	path = tests/riscv-arch-test
 	url = https://github.com/riscv-non-isa/riscv-arch-test
+[submodule "bench/coremark"]
+	path = bench/coremark
+	url = https://github.com/eembc/coremark.git

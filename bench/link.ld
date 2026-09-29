@@ -7,7 +7,7 @@ SECTIONS
   .text   : { *(.text.init) *(.text) *(.text.*) }
 
   . = 0x00020000;
-  .rodata : { *(.rodata) *(.rodata.*) }
+  .rodata : { *(.rodata) *(.rodata.*) *(.srodata) *(.srodata.*) }
   .data   : { *(.data) *(.data.*) *(.sdata) *(.sdata.*) }
   .bss    : { *(.bss) *(.bss.*) *(.sbss) *(.sbss.*) *(COMMON) }
 

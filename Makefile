@@ -8,10 +8,10 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := test
 .PHONY: test rv32ui rv32um rv32mi riscv-arch-test cosim-test cosim-test-rv32ui cosim-test-rv32um cosim-test-rv32mi \
-        cosim-random cycle-check cycle-baseline latency-sweep dhrystone spike help clean FORCE
+        cosim-random cycle-check cycle-baseline latency-sweep coremark spike help clean FORCE
 .SECONDARY:
 
-# Configuration for single-suite targets, dhrystone and cosim-random:
+# Configuration for single-suite targets, coremark and cosim-random:
 # core runs from IMEM/DMEM, system from SDRAM through the caches
 CONFIG ?= core
 ifeq ($(filter $(CONFIG),core system),)
@@ -27,6 +27,9 @@ SIM_ARGS := +stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) +timeout=$(SIM_T
 # Tests run at a time by tools/run-tests.sh
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc)
 export JOBS
+
+# CoreMark iterations, about 50 s each on Icarus
+CM_ITERS ?= 3
 
 # Random programs for cosim-random
 ITERS  ?= 50
@@ -55,8 +58,8 @@ make cosim-random             CONFIG=$(CONFIG) ITERS=$(ITERS)          random pr
 make cycle-check              -                             cycle counts per test against tests/cycles/
 make cycle-baseline           -                             record those cycle counts, overwriting them
 make latency-sweep            -                             every suite at memory latency 1 to 16, then with stalls and fixed latency
-make dhrystone                CONFIG=$(CONFIG) STALL_RATE=$(STALL_RATE)      Dhrystone on Icarus, in DMIPS/MHz
-                              MEM_LATENCY=$(MEM_LATENCY)
+make coremark                 CONFIG=$(CONFIG) CM_ITERS=$(CM_ITERS)      CoreMark on Icarus, in CoreMark/MHz
+                              STALL_RATE=$(STALL_RATE) MEM_LATENCY=$(MEM_LATENCY)
 make clean                    -                             delete build/, including Spike and the riscv-arch-test tools
 endef
 
@@ -155,51 +158,50 @@ latency-sweep: $(DUMPHEX) $(ICARUS_SIM) $(ALL_ELFS)
 			&& echo ok || { echo "FAILED, see $$log"; rc=1; }; \
 	done; exit $$rc
 
-# libmc, the small C library Dhrystone links against
-LIBMC     := build/libmc/libmc.a
-LIBMC_OBJ := $(patsubst bench/libmc/%,build/libmc/%.o,$(basename $(sort $(wildcard bench/libmc/*.[cs]))))
+# CoreMark, unmodified from the bench/coremark submodule plus the port in
+# bench/coremark-port; CoreMark/MHz is iterations * 1e6 / cycles. Simulation can't
+# meet CoreMark's 10 s minimum, so only its CRC checks decide pass or fail
+CM       := build/$(CONFIG)/bench/coremark
+CM_LD    := bench/$(if $(filter system,$(CONFIG)),link-system,link).ld
+CM_OBJS  := $(addprefix $(CM)/,crt0.o core_list_join.o core_main.o core_matrix.o core_state.o core_util.o \
+            core_portme.o ee_printf.o $(if $(filter system,$(CONFIG)),boot.o))
+CM_OPT   := -O2
+CM_FLAGS := -march=$(MARCH) -mabi=$(MABI) $(CM_OPT) -Ibench/coremark -Ibench/coremark-port \
+            -DITERATIONS=$(CM_ITERS) -DFLAGS_STR='"$(CM_OPT)"'
 
-build/libmc/%.o: bench/libmc/%.c bench/libmc/libmc.h bench/libmc/base.h
+$(CM)/%.o: bench/coremark/%.c bench/coremark/coremark.h bench/coremark-port/core_portme.h
 	@mkdir -p $(@D)
-	$(CC) -march=$(MARCH) -mabi=$(MABI) -std=gnu99 -O1 -Wno-builtin-declaration-mismatch -c $< -o $@
+	$(CC) $(CM_FLAGS) -c $< -o $@
 
-build/libmc/%.o: bench/libmc/%.s
+# Rebuilt every time, since ITERATIONS only reaches CoreMark through it
+$(CM)/core_portme.o: bench/coremark-port/core_portme.c FORCE
 	@mkdir -p $(@D)
-	$(AS) -march=$(MARCH) -mabi=$(MABI) $< -o $@
+	$(CC) $(CM_FLAGS) -c $< -o $@
 
-$(LIBMC): $(LIBMC_OBJ)
-	$(AR) rcs $@ $^
-
-# Dhrystone, unmodified from riscv-tests plus bench/dhrystone/port.c; DMIPS/MHz is 1e6 / cycles per run / 1757
-DHRY       := build/$(CONFIG)/bench/dhrystone
-DHRY_LD    := bench/$(if $(filter system,$(CONFIG)),link-system,link).ld
-DHRY_OBJS  := $(addprefix $(DHRY)/,crt0.o dhrystone.o dhrystone_main.o port.o $(if $(filter system,$(CONFIG)),boot.o))
-DHRY_FLAGS := -march=$(MARCH) -mabi=$(MABI) -std=gnu17 -O2 -Ibench/libmc -Ibench/dhrystone \
-              -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch -Wno-implicit-int -Wno-return-type
-
-$(DHRY)/%.o: bench/dhrystone/%.c bench/dhrystone/dhrystone.h bench/dhrystone/rv_env.h
+$(CM)/%.o: bench/coremark-port/%.c bench/coremark/coremark.h bench/coremark-port/core_portme.h
 	@mkdir -p $(@D)
-	$(CC) $(DHRY_FLAGS) -c $< -o $@
+	$(CC) $(CM_FLAGS) -c $< -o $@
 
-$(DHRY)/%.o: bench/dhrystone/%.s
+$(CM)/%.o: bench/coremark-port/%.s
 	@mkdir -p $(@D)
-	$(CC) $(DHRY_FLAGS) -c $< -o $@
+	$(CC) $(CM_FLAGS) -c $< -o $@
 
-$(DHRY)/boot.o: $(RVENV)/boot.S
+$(CM)/boot.o: $(RVENV)/boot.S
 	@mkdir -p $(@D)
-	$(CC) $(DHRY_FLAGS) -c $< -o $@
+	$(CC) $(CM_FLAGS) -c $< -o $@
 
-$(DHRY)/dhrystone.elf: $(DHRY_OBJS) $(LIBMC) $(DHRY_LD)
-	$(LD) -m $(LDEMUL) --script $(DHRY_LD) --no-warn-rwx-segments -o $@ $(DHRY_OBJS) \
-		-Lbuild/libmc -lmc -L$(RISCV_LIB) -lgcc
+$(CM)/coremark.elf: $(CM_OBJS) $(CM_LD)
+	$(LD) -m $(LDEMUL) --script $(CM_LD) --no-warn-rwx-segments -o $@ $(CM_OBJS) -L$(RISCV_LIB) -lgcc
 
-dhrystone: $(DHRY)/dhrystone.elf $(DUMPHEX) $(ICARUS_SIM)
-	@tools/elftohex-$(CONFIG).sh $< build/hex/$(CONFIG)/dhrystone
-	@cd build/hex/$(CONFIG)/dhrystone && $(CURDIR)/$(ICARUS_SIM) +timeout=5000000 \
-		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) 2>/dev/null | \
-	awk -F= '/^CYCLES=/ { c = $$2 } /^RUNS=/ { r = $$2 } \
-		END { if (!r) { print "dhrystone did not finish"; exit 1 } \
-		      printf "$(CONFIG): %d runs, %d cycles per run, %.3f DMIPS/MHz\n", r, c / r, 1e6 / (c / r) / 1757 }'
+coremark: $(CM)/coremark.elf $(DUMPHEX) $(ICARUS_SIM)
+	@tools/elftohex-$(CONFIG).sh $< build/hex/$(CONFIG)/coremark
+	@cd build/hex/$(CONFIG)/coremark && $(CURDIR)/$(ICARUS_SIM) +timeout=$$(( ($(CM_ITERS) + 2) * 1000000 )) \
+		+stallrate=$(STALL_RATE) +memlatency=$(MEM_LATENCY) > $(CURDIR)/$(CM)/coremark.log 2>/dev/null; \
+	awk -F': *' '/^Total ticks/ { t = $$2 } /^Iterations  / { n = $$2 } \
+		/ERROR!/ && !/at least 10 secs/ { bad = 1 } \
+		END { if (!n || !t || bad) { print "coremark failed, see $(CM)/coremark.log"; exit 1 } \
+		      printf "$(CONFIG): %d iterations, %d cycles per iteration, %.3f CoreMark/MHz\n", n, t / n, n * 1e6 / t }' \
+		$(CURDIR)/$(CM)/coremark.log
 
 # Spike, built from the cosim/riscv-isa-sim submodule into build/spike
 SPIKE := $(CURDIR)/build/spike

@@ -6,7 +6,7 @@ SECTIONS
   .boot   0x00010000 : { *(.boot) }
 
   .text   0x80000000 : { *(.text.init) *(.text) *(.text.*) }
-  .rodata            : { *(.rodata) *(.rodata.*) }
+  .rodata            : { *(.rodata) *(.rodata.*) *(.srodata) *(.srodata.*) }
   .data              : { *(.data) *(.data.*) *(.sdata) *(.sdata.*) }
   .bss               : { *(.bss) *(.bss.*) *(.sbss) *(.sbss.*) *(COMMON) }
 

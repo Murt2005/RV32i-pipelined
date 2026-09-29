@@ -1,4 +1,4 @@
-# Reset entry for the Dhrystone image: set up a stack, run main, halt.
+# Reset entry for the CoreMark image: set up a stack, run main, halt.
 #
 # In .text.init so link.ld places it first, at the reset PC 0x00010000,
 # whatever order the objects are linked in.
