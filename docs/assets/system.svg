@@ -1,0 +1,412 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:s="https://github.com/nturley/netlistsvg" width="1334" height="742.5" viewBox="0 0 1334 742.5">
+  <style>svg {
+    stroke:#000;
+    fill:none;
+  }
+  text {
+    fill:#000;
+    stroke:none;
+    font-size:10px;
+    font-weight: bold;
+    font-family: "Courier New", monospace;
+  }
+  .nodelabel {
+    text-anchor: middle;
+  }
+  .inputPortLabel {
+    text-anchor: end;
+  }
+  .splitjoinBody {
+    fill:#000;
+  }</style>
+  <rect x="0" y="0" width="1334" height="742.5" style="fill:#ffffff;stroke:none"/>
+  <g s:type="inputExt" transform="translate(12,102.5)" s:width="30" s:height="20" id="cell_stall_rate">
+    <text x="15" y="-4" class="nodelabel cell_stall_rate" s:attribute="ref">stall_rate</text>
+    <s:alias val="$_inputExt_"/>
+    <path d="M0,0 L0,20 L15,20 L30,10 L15,0 Z" class="cell_stall_rate"/>
+    <g s:x="28" s:y="10" s:pid="Y"/>
+  </g>
+  <g s:type="inputExt" transform="translate(1023,130.5)" s:width="30" s:height="20" id="cell_mem_delay">
+    <text x="15" y="-4" class="nodelabel cell_mem_delay" s:attribute="ref">mem_delay</text>
+    <s:alias val="$_inputExt_"/>
+    <path d="M0,0 L0,20 L15,20 L30,10 L15,0 Z" class="cell_mem_delay"/>
+    <g s:x="28" s:y="10" s:pid="Y"/>
+  </g>
+  <g s:type="generic" transform="translate(168,102)" s:width="30" s:height="40" id="cell_stall_lfsr (sim only)">
+    <text x="15" y="-4" class="nodelabel cell_stall_lfsr (sim only)" s:attribute="ref">stall_lfsr (sim only)</text>
+    <rect width="30" height="20" s:generic="body" class="cell_stall_lfsr (sim only)"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_stall_lfsr (sim only)~stall_rate">
+      <text x="-3" y="-4" class="inputPortLabel cell_stall_lfsr (sim only)">stall_rate</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_stall_lfsr (sim only)~cpu_stall">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_stall_lfsr (sim only)">cpu_stall</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(402,42)" s:width="30" s:height="40" id="cell_the_core">
+    <text x="15" y="-4" class="nodelabel cell_the_core" s:attribute="ref">core
+    the_core</text>
+    <rect width="30" height="100" s:generic="body" class="cell_the_core"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_the_core~data_mem_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_the_core">data_mem_rsp</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_the_core~inst_mem_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_the_core">inst_mem_rsp</text>
+    </g>
+    <g transform="translate(0,50)" s:x="0" s:y="10" s:pid="in0" id="port_the_core~reset_pc">
+      <text x="-3" y="-4" class="inputPortLabel cell_the_core">reset_pc</text>
+    </g>
+    <g transform="translate(0,70)" s:x="0" s:y="10" s:pid="in0" id="port_the_core~stall">
+      <text x="-3" y="-4" class="inputPortLabel cell_the_core">stall</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_the_core~data_mem_addr">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_the_core">data_mem_addr</text>
+    </g>
+    <g transform="translate(30,30)" s:x="30" s:y="10" s:pid="out0" id="port_the_core~data_mem_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_the_core">data_mem_req</text>
+    </g>
+    <g transform="translate(30,50)" s:x="30" s:y="10" s:pid="out0" id="port_the_core~inst_mem_addr">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_the_core">inst_mem_addr</text>
+    </g>
+    <g transform="translate(30,70)" s:x="30" s:y="10" s:pid="out0" id="port_the_core~inst_mem_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_the_core">inst_mem_req</text>
+    </g>
+    <g transform="translate(30,90)" s:x="30" s:y="10" s:pid="out0" id="port_the_core~retired">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_the_core">retired</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(796,546.5)" s:width="30" s:height="40" id="cell_perf_counters">
+    <text x="15" y="-4" class="nodelabel cell_perf_counters" s:attribute="ref">perf_counters</text>
+    <rect width="30" height="40" s:generic="body" class="cell_perf_counters"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_perf_counters~retired">
+      <text x="-3" y="-4" class="inputPortLabel cell_perf_counters">retired</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_perf_counters~perf_cycles">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_perf_counters">perf_cycles</text>
+    </g>
+    <g transform="translate(30,30)" s:x="30" s:y="10" s:pid="out0" id="port_perf_counters~perf_retired">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_perf_counters">perf_retired</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(627,382)" s:width="30" s:height="40" id="cell_ibus">
+    <text x="15" y="-4" class="nodelabel cell_ibus" s:attribute="ref">bus_decoder
+    ibus</text>
+    <rect width="30" height="120" s:generic="body" class="cell_ibus"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_ibus~cpu_addr">
+      <text x="-3" y="-4" class="inputPortLabel cell_ibus">cpu_addr</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_ibus~cpu_req">
+      <text x="-3" y="-4" class="inputPortLabel cell_ibus">cpu_req</text>
+    </g>
+    <g transform="translate(0,50)" s:x="0" s:y="10" s:pid="in0" id="port_ibus~dmem_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_ibus">dmem_rsp</text>
+    </g>
+    <g transform="translate(0,70)" s:x="0" s:y="10" s:pid="in0" id="port_ibus~imem_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_ibus">imem_rsp</text>
+    </g>
+    <g transform="translate(0,90)" s:x="0" s:y="10" s:pid="in0" id="port_ibus~mmio_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_ibus">mmio_rsp</text>
+    </g>
+    <g transform="translate(0,110)" s:x="0" s:y="10" s:pid="in0" id="port_ibus~sdram_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_ibus">sdram_rsp</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_ibus~cpu_rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_ibus">cpu_rsp</text>
+    </g>
+    <g transform="translate(30,30)" s:x="30" s:y="10" s:pid="out0" id="port_ibus~dmem_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_ibus">dmem_req</text>
+    </g>
+    <g transform="translate(30,50)" s:x="30" s:y="10" s:pid="out0" id="port_ibus~imem_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_ibus">imem_req</text>
+    </g>
+    <g transform="translate(30,70)" s:x="30" s:y="10" s:pid="out0" id="port_ibus~mmio_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_ibus">mmio_req</text>
+    </g>
+    <g transform="translate(30,90)" s:x="30" s:y="10" s:pid="out0" id="port_ibus~sdram_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_ibus">sdram_req</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(627,42)" s:width="30" s:height="40" id="cell_dbus">
+    <text x="15" y="-4" class="nodelabel cell_dbus" s:attribute="ref">bus_decoder
+    dbus</text>
+    <rect width="30" height="120" s:generic="body" class="cell_dbus"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_dbus~cpu_addr">
+      <text x="-3" y="-4" class="inputPortLabel cell_dbus">cpu_addr</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_dbus~cpu_req">
+      <text x="-3" y="-4" class="inputPortLabel cell_dbus">cpu_req</text>
+    </g>
+    <g transform="translate(0,50)" s:x="0" s:y="10" s:pid="in0" id="port_dbus~dmem_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_dbus">dmem_rsp</text>
+    </g>
+    <g transform="translate(0,70)" s:x="0" s:y="10" s:pid="in0" id="port_dbus~imem_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_dbus">imem_rsp</text>
+    </g>
+    <g transform="translate(0,90)" s:x="0" s:y="10" s:pid="in0" id="port_dbus~mmio_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_dbus">mmio_rsp</text>
+    </g>
+    <g transform="translate(0,110)" s:x="0" s:y="10" s:pid="in0" id="port_dbus~sdram_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_dbus">sdram_rsp</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_dbus~cpu_rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_dbus">cpu_rsp</text>
+    </g>
+    <g transform="translate(30,30)" s:x="30" s:y="10" s:pid="out0" id="port_dbus~dmem_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_dbus">dmem_req</text>
+    </g>
+    <g transform="translate(30,50)" s:x="30" s:y="10" s:pid="out0" id="port_dbus~imem_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_dbus">imem_req</text>
+    </g>
+    <g transform="translate(30,70)" s:x="30" s:y="10" s:pid="out0" id="port_dbus~mmio_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_dbus">mmio_req</text>
+    </g>
+    <g transform="translate(30,90)" s:x="30" s:y="10" s:pid="out0" id="port_dbus~sdram_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_dbus">sdram_req</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(1262,402)" s:width="30" s:height="40" id="cell_code_mem">
+    <text x="15" y="-4" class="nodelabel cell_code_mem" s:attribute="ref">memory32
+    code_mem</text>
+    <rect width="30" height="40" s:generic="body" class="cell_code_mem"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_code_mem~max_delay">
+      <text x="-3" y="-4" class="inputPortLabel cell_code_mem">max_delay</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_code_mem~req">
+      <text x="-3" y="-4" class="inputPortLabel cell_code_mem">req</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_code_mem~rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_code_mem">rsp</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(814,453.5)" s:width="30" s:height="40" id="cell_icache_m">
+    <text x="15" y="-4" class="nodelabel cell_icache_m" s:attribute="ref">icache
+    icache_m</text>
+    <rect width="30" height="60" s:generic="body" class="cell_icache_m"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_icache_m~cpu_req">
+      <text x="-3" y="-4" class="inputPortLabel cell_icache_m">cpu_req</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_icache_m~invalidate">
+      <text x="-3" y="-4" class="inputPortLabel cell_icache_m">invalidate</text>
+    </g>
+    <g transform="translate(0,50)" s:x="0" s:y="10" s:pid="in0" id="port_icache_m~mem_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_icache_m">mem_rsp</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_icache_m~cpu_rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_icache_m">cpu_rsp</text>
+    </g>
+    <g transform="translate(30,30)" s:x="30" s:y="10" s:pid="out0" id="port_icache_m~mem_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_icache_m">mem_req</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(1262,42)" s:width="30" s:height="40" id="cell_data_mem">
+    <text x="15" y="-4" class="nodelabel cell_data_mem" s:attribute="ref">memory32
+    data_mem</text>
+    <rect width="30" height="40" s:generic="body" class="cell_data_mem"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_data_mem~max_delay">
+      <text x="-3" y="-4" class="inputPortLabel cell_data_mem">max_delay</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_data_mem~req">
+      <text x="-3" y="-4" class="inputPortLabel cell_data_mem">req</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_data_mem~rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_data_mem">rsp</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(1023,546.5)" s:width="30" s:height="40" id="cell_mmio_m">
+    <text x="15" y="-4" class="nodelabel cell_mmio_m" s:attribute="ref">mmio
+    mmio_m</text>
+    <rect width="30" height="140" s:generic="body" class="cell_mmio_m"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_mmio_m~perf_cycles">
+      <text x="-3" y="-4" class="inputPortLabel cell_mmio_m">perf_cycles</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_mmio_m~perf_retired">
+      <text x="-3" y="-4" class="inputPortLabel cell_mmio_m">perf_retired</text>
+    </g>
+    <g transform="translate(0,50)" s:x="0" s:y="10" s:pid="in0" id="port_mmio_m~req">
+      <text x="-3" y="-4" class="inputPortLabel cell_mmio_m">req</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_mmio_m~halt_pulse">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_mmio_m">halt_pulse</text>
+    </g>
+    <g transform="translate(30,30)" s:x="30" s:y="10" s:pid="out0" id="port_mmio_m~icache_invalidate">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_mmio_m">icache_invalidate</text>
+    </g>
+    <g transform="translate(30,50)" s:x="30" s:y="10" s:pid="out0" id="port_mmio_m~putchar_data">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_mmio_m">putchar_data</text>
+    </g>
+    <g transform="translate(30,70)" s:x="30" s:y="10" s:pid="out0" id="port_mmio_m~putchar_valid">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_mmio_m">putchar_valid</text>
+    </g>
+    <g transform="translate(30,90)" s:x="30" s:y="10" s:pid="out0" id="port_mmio_m~rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_mmio_m">rsp</text>
+    </g>
+    <g transform="translate(30,110)" s:x="30" s:y="10" s:pid="out0" id="port_mmio_m~tohost_data">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_mmio_m">tohost_data</text>
+    </g>
+    <g transform="translate(30,130)" s:x="30" s:y="10" s:pid="out0" id="port_mmio_m~tohost_valid">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_mmio_m">tohost_valid</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(811.5,195)" s:width="30" s:height="40" id="cell_dcache_m">
+    <text x="15" y="-4" class="nodelabel cell_dcache_m" s:attribute="ref">dcache
+    dcache_m</text>
+    <rect width="30" height="40" s:generic="body" class="cell_dcache_m"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_dcache_m~cpu_req">
+      <text x="-3" y="-4" class="inputPortLabel cell_dcache_m">cpu_req</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_dcache_m~mem_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_dcache_m">mem_rsp</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_dcache_m~cpu_rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_dcache_m">cpu_rsp</text>
+    </g>
+    <g transform="translate(30,30)" s:x="30" s:y="10" s:pid="out0" id="port_dcache_m~mem_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_dcache_m">mem_req</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(1033.3333333333335,268)" s:width="30" s:height="40" id="cell_sdram_arb">
+    <text x="15" y="-4" class="nodelabel cell_sdram_arb" s:attribute="ref">bus_arbiter
+    sdram_arb</text>
+    <rect width="30" height="60" s:generic="body" class="cell_sdram_arb"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_sdram_arb~a_req">
+      <text x="-3" y="-4" class="inputPortLabel cell_sdram_arb">a_req</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_sdram_arb~b_req">
+      <text x="-3" y="-4" class="inputPortLabel cell_sdram_arb">b_req</text>
+    </g>
+    <g transform="translate(0,50)" s:x="0" s:y="10" s:pid="in0" id="port_sdram_arb~t_rsp">
+      <text x="-3" y="-4" class="inputPortLabel cell_sdram_arb">t_rsp</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_sdram_arb~a_rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_sdram_arb">a_rsp</text>
+    </g>
+    <g transform="translate(30,30)" s:x="30" s:y="10" s:pid="out0" id="port_sdram_arb~b_rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_sdram_arb">b_rsp</text>
+    </g>
+    <g transform="translate(30,50)" s:x="30" s:y="10" s:pid="out0" id="port_sdram_arb~t_req">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_sdram_arb">t_req</text>
+    </g>
+  </g>
+  <g s:type="generic" transform="translate(1262,130)" s:width="30" s:height="40" id="cell_sdram">
+    <text x="15" y="-4" class="nodelabel cell_sdram" s:attribute="ref">memory32
+    sdram</text>
+    <rect width="30" height="40" s:generic="body" class="cell_sdram"/>
+    <g transform="translate(0,10)" s:x="0" s:y="10" s:pid="in0" id="port_sdram~max_delay">
+      <text x="-3" y="-4" class="inputPortLabel cell_sdram">max_delay</text>
+    </g>
+    <g transform="translate(0,30)" s:x="0" s:y="10" s:pid="in0" id="port_sdram~req">
+      <text x="-3" y="-4" class="inputPortLabel cell_sdram">req</text>
+    </g>
+    <g transform="translate(30,10)" s:x="30" s:y="10" s:pid="out0" id="port_sdram~rsp">
+      <text x="5" y="-4" style="fill:#000; stroke:none" class="cell_sdram">rsp</text>
+    </g>
+  </g>
+  <g s:type="outputExt" transform="translate(1262,547)" s:width="30" s:height="20" id="cell_halt">
+    <text x="15" y="-4" class="nodelabel cell_halt" s:attribute="ref">halt</text>
+    <s:alias val="$_outputExt_"/>
+    <path d="M30,0 L30,20 L15,20 L0,10 L15,0 Z" class="cell_halt"/>
+    <g s:x="0" s:y="10" s:pid="A"/>
+  </g>
+  <line x1="40" x2="168" y1="112.5" y2="112.5" class="net_42"/>
+  <line x1="658" x2="723" y1="52.5" y2="52.5" class="net_9"/>
+  <line x1="723" x2="723" y1="52.5" y2="12" class="net_9"/>
+  <line x1="723" x2="304" y1="12" y2="12" class="net_9"/>
+  <line x1="304" x2="304" y1="12" y2="52.5" class="net_9"/>
+  <line x1="304" x2="402" y1="52.5" y2="52.5" class="net_9"/>
+  <line x1="658" x2="723" y1="392.5" y2="392.5" class="net_20"/>
+  <line x1="723" x2="723" y1="392.5" y2="730.5" class="net_20"/>
+  <line x1="723" x2="304" y1="730.5" y2="730.5" class="net_20"/>
+  <line x1="304" x2="304" y1="730.5" y2="72.5" class="net_20"/>
+  <line x1="304" x2="402" y1="72.5" y2="72.5" class="net_20"/>
+  <line x1="199" x2="402" y1="112.5" y2="112.5" class="net_41"/>
+  <line x1="433" x2="522" y1="132.5" y2="132.5" class="net_40"/>
+  <line x1="522" x2="522" y1="132.5" y2="719.5" class="net_40"/>
+  <line x1="522" x2="743" y1="719.5" y2="719.5" class="net_40"/>
+  <line x1="743" x2="743" y1="719.5" y2="557" class="net_40"/>
+  <line x1="743" x2="796" y1="557" y2="557" class="net_40"/>
+  <line x1="433" x2="542" y1="92.5" y2="92.5" class="net_18"/>
+  <line x1="542" x2="542" y1="92.5" y2="392.5" class="net_18"/>
+  <line x1="542" x2="627" y1="392.5" y2="392.5" class="net_18"/>
+  <line x1="433" x2="532" y1="112.5" y2="112.5" class="net_19"/>
+  <line x1="532" x2="532" y1="112.5" y2="412.5" class="net_19"/>
+  <line x1="532" x2="627" y1="412.5" y2="412.5" class="net_19"/>
+  <line x1="1293" x2="1322" y1="412.5" y2="412.5" class="net_4"/>
+  <line x1="1322" x2="1322" y1="412.5" y2="709.5" class="net_4"/>
+  <line x1="1322" x2="532" y1="709.5" y2="709.5" class="net_4"/>
+  <line x1="532" x2="532" y1="709.5" y2="452.5" class="net_4"/>
+  <line x1="532" x2="627" y1="452.5" y2="452.5" class="net_4"/>
+  <line x1="845" x2="910" y1="464" y2="464" class="net_26"/>
+  <line x1="910" x2="910" y1="464" y2="362" class="net_26"/>
+  <line x1="910" x2="562" y1="362" y2="362" class="net_26"/>
+  <line x1="562" x2="562" y1="362" y2="492.5" class="net_26"/>
+  <line x1="562" x2="627" y1="492.5" y2="492.5" class="net_26"/>
+  <line x1="433" x2="627" y1="52.5" y2="52.5" class="net_7"/>
+  <line x1="433" x2="627" y1="72.5" y2="72.5" class="net_8"/>
+  <line x1="1293" x2="1322" y1="52.5" y2="52.5" class="net_6"/>
+  <line x1="1322" x2="1322" y1="52.5" y2="22" class="net_6"/>
+  <line x1="1322" x2="562" y1="22" y2="22" class="net_6"/>
+  <line x1="562" x2="562" y1="22" y2="92.5" class="net_6"/>
+  <line x1="562" x2="627" y1="92.5" y2="92.5" class="net_6"/>
+  <line x1="1054" x2="1167" y1="637" y2="637" class="net_13"/>
+  <line x1="1167" x2="1167" y1="637" y2="351" class="net_13"/>
+  <line x1="1167" x2="552" y1="351" y2="351" class="net_13"/>
+  <line x1="552" x2="552" y1="351" y2="132.5" class="net_13"/>
+  <line x1="552" x2="627" y1="132.5" y2="132.5" class="net_13"/>
+  <line x1="842.5" x2="910" y1="205.5" y2="205.5" class="net_15"/>
+  <line x1="910" x2="910" y1="205.5" y2="175" class="net_15"/>
+  <line x1="910" x2="562" y1="175" y2="175" class="net_15"/>
+  <line x1="562" x2="562" y1="175" y2="152.5" class="net_15"/>
+  <line x1="562" x2="627" y1="152.5" y2="152.5" class="net_15"/>
+  <line x1="1051" x2="1197" y1="140.5" y2="140.5" class="net_2"/>
+  <line x1="1197" x2="1197" y1="140.5" y2="412.5" class="net_2"/>
+  <circle cx="1197" cy="140.5" r="2" style="fill:#000" class="net_2"/>
+  <line x1="1197" x2="1262" y1="412.5" y2="412.5" class="net_2"/>
+  <line x1="1051" x2="1197" y1="140.5" y2="140.5" class="net_2"/>
+  <line x1="1197" x2="1197" y1="140.5" y2="52.5" class="net_2"/>
+  <line x1="1197" x2="1262" y1="52.5" y2="52.5" class="net_2"/>
+  <line x1="1051" x2="1262" y1="140.5" y2="140.5" class="net_2"/>
+  <line x1="658" x2="1262" y1="432.5" y2="432.5" class="net_3"/>
+  <line x1="658" x2="733" y1="472.5" y2="472.5" class="net_25"/>
+  <line x1="733" x2="733" y1="472.5" y2="464" class="net_25"/>
+  <line x1="733" x2="814" y1="464" y2="464" class="net_25"/>
+  <line x1="1054" x2="1177" y1="577" y2="577" class="net_27"/>
+  <line x1="1177" x2="1177" y1="577" y2="699.5" class="net_27"/>
+  <line x1="1177" x2="733" y1="699.5" y2="699.5" class="net_27"/>
+  <line x1="733" x2="733" y1="699.5" y2="484" class="net_27"/>
+  <line x1="733" x2="814" y1="484" y2="484" class="net_27"/>
+  <line x1="1064.3333333333335" x2="1177" y1="298.5" y2="298.5" class="net_29"/>
+  <line x1="1177" x2="1177" y1="298.5" y2="526.5" class="net_29"/>
+  <line x1="1177" x2="743" y1="526.5" y2="526.5" class="net_29"/>
+  <line x1="743" x2="743" y1="526.5" y2="504" class="net_29"/>
+  <line x1="743" x2="814" y1="504" y2="504" class="net_29"/>
+  <line x1="658" x2="1262" y1="72.5" y2="72.5" class="net_5"/>
+  <line x1="827" x2="1023" y1="557" y2="557" class="net_31"/>
+  <line x1="827" x2="1023" y1="577" y2="577" class="net_32"/>
+  <line x1="658" x2="723" y1="112.5" y2="112.5" class="net_12"/>
+  <line x1="723" x2="723" y1="112.5" y2="258" class="net_12"/>
+  <line x1="723" x2="930" y1="258" y2="258" class="net_12"/>
+  <line x1="930" x2="930" y1="258" y2="597" class="net_12"/>
+  <line x1="930" x2="1023" y1="597" y2="597" class="net_12"/>
+  <line x1="658" x2="733" y1="132.5" y2="132.5" class="net_14"/>
+  <line x1="733" x2="733" y1="132.5" y2="205.5" class="net_14"/>
+  <line x1="733" x2="811.5" y1="205.5" y2="205.5" class="net_14"/>
+  <line x1="1064.3333333333335" x2="1167" y1="278.5" y2="278.5" class="net_17"/>
+  <line x1="1167" x2="1167" y1="278.5" y2="248" class="net_17"/>
+  <line x1="1167" x2="743" y1="248" y2="248" class="net_17"/>
+  <line x1="743" x2="743" y1="248" y2="225.5" class="net_17"/>
+  <line x1="743" x2="811.5" y1="225.5" y2="225.5" class="net_17"/>
+  <line x1="842.5" x2="940" y1="225.5" y2="225.5" class="net_16"/>
+  <line x1="940" x2="940" y1="225.5" y2="278.5" class="net_16"/>
+  <line x1="940" x2="1033.3333333333335" y1="278.5" y2="278.5" class="net_16"/>
+  <line x1="845" x2="920" y1="484" y2="484" class="net_28"/>
+  <line x1="920" x2="920" y1="484" y2="298.5" class="net_28"/>
+  <line x1="920" x2="1033.3333333333335" y1="298.5" y2="298.5" class="net_28"/>
+  <line x1="1293" x2="1322" y1="140.5" y2="140.5" class="net_38"/>
+  <line x1="1322" x2="1322" y1="140.5" y2="341" class="net_38"/>
+  <line x1="1322" x2="940" y1="341" y2="341" class="net_38"/>
+  <line x1="940" x2="940" y1="341" y2="318.5" class="net_38"/>
+  <line x1="940" x2="1033.3333333333335" y1="318.5" y2="318.5" class="net_38"/>
+  <line x1="1064.3333333333335" x2="1187" y1="318.5" y2="318.5" class="net_37"/>
+  <line x1="1187" x2="1187" y1="318.5" y2="160.5" class="net_37"/>
+  <line x1="1187" x2="1262" y1="160.5" y2="160.5" class="net_37"/>
+  <line x1="1054" x2="1262" y1="557" y2="557" class="net_30"/>
+</svg>
